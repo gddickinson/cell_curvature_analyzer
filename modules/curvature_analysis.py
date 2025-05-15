@@ -1,4 +1,5 @@
 import numpy as np
+from PyQt5.QtWidgets import QMessageBox
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from skimage import measure, morphology, draw
