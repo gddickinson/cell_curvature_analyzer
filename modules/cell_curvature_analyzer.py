@@ -48,6 +48,7 @@ class AnalysisWorker(QThread):
         super().__init__()
         self.analyzer = analyzer
         self.params = params
+        print(f"DEBUG: AnalysisWorker initialized with try_rotation={params.get('try_rotation', False)}")
 
     def run(self):
         try:
@@ -59,6 +60,8 @@ class AnalysisWorker(QThread):
                 self.params['depth'],
                 self.params['width'],
                 self.params['min_cell_coverage'],
+                self.params.get('try_rotation', False),
+                self.params.get('exclude_endpoints', False),  # Add this parameter
                 self.progress_callback
             )
             self.complete_signal.emit(results)
@@ -3030,11 +3033,18 @@ class MainWindow(QMainWindow):
             return
 
         # Get parameters from UI
+        try_rotation = self.parameter_panel.parameters.get('try_rotation', False)
+        exclude_endpoints = self.parameter_panel.parameters.get('exclude_endpoints', False)
+
+        print(f"DEBUG: Analyzing current frame with try_rotation={try_rotation}, exclude_endpoints={exclude_endpoints}")
+
         params = {
             'n_points': self.n_points_spin.value(),
             'depth': self.depth_spin.value(),
             'width': self.width_spin.value(),
-            'min_cell_coverage': self.min_coverage_spin.value()
+            'min_cell_coverage': self.min_coverage_spin.value(),
+            'try_rotation': try_rotation,
+            'exclude_endpoints': exclude_endpoints
         }
 
         # Get current frame data
@@ -3635,6 +3645,11 @@ class MainWindow(QMainWindow):
             return
 
         # Get parameters
+        try_rotation = self.parameter_panel.parameters.get('try_rotation', False)
+        exclude_endpoints = self.parameter_panel.parameters.get('exclude_endpoints', False)
+
+        print(f"DEBUG: Starting analysis with try_rotation={try_rotation}, exclude_endpoints={exclude_endpoints}")
+
         params = {
             'image_path': self.loaded_data.get('image_path', ''),
             'mask_path': self.loaded_data.get('mask_path', ''),
@@ -3642,8 +3657,16 @@ class MainWindow(QMainWindow):
             'n_points': self.n_points_spin.value(),
             'depth': self.depth_spin.value(),
             'width': self.width_spin.value(),
-            'min_cell_coverage': self.min_coverage_spin.value()
+            'min_cell_coverage': self.min_coverage_spin.value(),
+            'try_rotation': try_rotation,
+            'exclude_endpoints': exclude_endpoints
         }
+
+
+        # Log all parameters
+        print(f"DEBUG: Analysis parameters:")
+        for key, value in params.items():
+            print(f"DEBUG:   {key}: {value}")
 
         # Create worker thread
         self.analysis_worker = AnalysisWorker(self.curvature_analyzer, params)
@@ -3722,15 +3745,20 @@ class MainWindow(QMainWindow):
         if image_type == "Original Image" and 'images' in self.loaded_data and self.loaded_data['images'] is not None:
             images = self.loaded_data['images']
             if frame < images.shape[0]:
-                # Apply brightness adjustment
+                # Copy the image but preserve original intensity values
                 image = images[frame].copy().astype(float)
 
-                # Normalize to 0-1 range
-                if np.max(image) > 0:
-                    image = image / np.max(image)
+                # Skip normalization, but still apply brightness windowing
+                # Calculate actual min/max values of the image
+                actual_min = np.min(image)
+                actual_max = np.max(image)
 
-                # Apply min/max brightness adjustment
-                image = np.clip((image - min_brightness) / (max_brightness - min_brightness + 1e-8), 0, 1)
+                # Calculate brightness window - scale between min and max based on slider settings
+                window_min = actual_min + min_brightness * (actual_max - actual_min)
+                window_max = actual_min + max_brightness * (actual_max - actual_min)
+
+                # Apply brightness window without normalization
+                image = np.clip(image, window_min, window_max)
 
                 self.image_viewer.set_image(image)
                 self.image_viewer.set_title(f"Original Image (Frame {frame+1}/{images.shape[0]})")
@@ -3749,19 +3777,31 @@ class MainWindow(QMainWindow):
                 masks = self.loaded_data['masks']
 
                 if frame < images.shape[0] and frame < masks.shape[0]:
-                    # Create overlay with brightness and opacity controls
+                    # Get raw image without normalization
                     image = images[frame].copy().astype(float)
                     mask = masks[frame]
 
-                    # Normalize to 0-1 range
-                    if np.max(image) > 0:
-                        image = image / np.max(image)
+                    # Calculate actual min/max values of the image
+                    actual_min = np.min(image)
+                    actual_max = np.max(image)
 
-                    # Apply min/max brightness adjustment
-                    image = np.clip((image - min_brightness) / (max_brightness - min_brightness + 1e-8), 0, 1)
+                    # Calculate brightness window
+                    window_min = actual_min + min_brightness * (actual_max - actual_min)
+                    window_max = actual_min + max_brightness * (actual_max - actual_min)
+
+                    # Apply brightness window without normalization
+                    image_windowed = np.clip(image, window_min, window_max)
+
+                    # To create overlay, we need to normalize for the RGB array
+                    # This is only for display purposes - raw values are preserved in the image_data property
+                    image_range = window_max - window_min
+                    if image_range > 0:
+                        image_norm = (image_windowed - window_min) / image_range
+                    else:
+                        image_norm = np.zeros_like(image_windowed)
 
                     # Create RGB overlay
-                    overlay = np.stack([image, image, image], axis=2)
+                    overlay = np.stack([image_norm, image_norm, image_norm], axis=2)
 
                     # Add red tint to masked areas with opacity control
                     red_mask = np.zeros_like(overlay)
@@ -3770,7 +3810,9 @@ class MainWindow(QMainWindow):
                     # Blend using mask opacity
                     overlay = overlay * (1 - mask_opacity * mask[:, :, np.newaxis]) + red_mask * mask_opacity * mask[:, :, np.newaxis]
 
+                    # Display the overlay, but store original data
                     self.image_viewer.set_image(overlay)
+                    self.image_viewer.image_data = image  # Store original intensity data for mouse hover
                     self.image_viewer.set_title(f"Overlay (Frame {frame+1}/{images.shape[0]})")
 
 
@@ -3793,37 +3835,27 @@ class MainWindow(QMainWindow):
         # Get frame results
         frame_results = self.loaded_data['results'][frame]
 
-        if 'contour_data' in frame_results:
-            print(f"Contour data exists with {len(frame_results['contour_data'])} points")
-        else:
-            print("No contour data found in frame_results")
-
         # Clear overlay canvas
         self.overlay_canvas.clear()
-
-        # Get overlay brightness settings
-        min_brightness = self.overlay_min_brightness_slider.value() / 100.0
-        max_brightness = self.overlay_max_brightness_slider.value() / 100.0
-        mask_opacity = self.overlay_mask_opacity_slider.value() / 100.0
 
         # Add background image if available
         if 'images' in self.loaded_data and self.loaded_data['images'] is not None:
             images = self.loaded_data['images']
             if frame < images.shape[0]:
-                # Apply brightness adjustment to background image
+                # Pass the raw image data to the overlay canvas without normalization
                 image = images[frame].copy().astype(float)
-                if np.max(image) > 0:
-                    image = image / np.max(image)
-                image = np.clip((image - min_brightness) / (max_brightness - min_brightness + 1e-8), 0, 1)
-
                 self.overlay_canvas.add_background(image)
+
+                # Store brightness settings for display purposes
+                self.overlay_canvas.min_brightness = self.overlay_min_brightness_slider.value() / 100.0
+                self.overlay_canvas.max_brightness = self.overlay_max_brightness_slider.value() / 100.0
 
         # Add mask if available
         if 'masks' in self.loaded_data and self.loaded_data['masks'] is not None:
             masks = self.loaded_data['masks']
             if frame < masks.shape[0]:
                 mask = masks[frame]
-                self.overlay_canvas.add_mask(mask, opacity=mask_opacity)
+                self.overlay_canvas.add_mask(mask, opacity=self.overlay_mask_opacity_slider.value() / 100.0)
 
         # Add contour if available and checkbox is checked
         if (self.show_contour_cb.isChecked() and
@@ -3870,7 +3902,9 @@ class MainWindow(QMainWindow):
             'valid_points' in frame_results):
             self.overlay_canvas.add_sampling_regions(
                 frame_results['sampling_regions'],
-                frame_results['valid_points']
+                frame_results['valid_points'],
+                frame_results.get('recovered_by_rotation'),
+                frame_results.get('exclude_endpoints', False)
             )
 
         # Update canvas

@@ -6,7 +6,7 @@ from matplotlib.figure import Figure
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
                             QTableWidgetItem, QHeaderView, QTextEdit, QGroupBox,
                             QDoubleSpinBox, QSpinBox, QFormLayout, QPushButton, QMessageBox,
-                            QComboBox)
+                            QComboBox, QCheckBox)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPixmap, QImage
 import datetime
@@ -19,6 +19,7 @@ class ImageViewer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
+        self.image_data = None  # Store the raw image data
 
     def init_ui(self):
         # Create layout
@@ -41,8 +42,16 @@ class ImageViewer(QWidget):
         self.title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.title_label)
 
+        # Add position and intensity label
+        self.position_label = QLabel("Position: -- Intensity: --")
+        self.position_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.position_label)
+
         # Set layout margins
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Connect mouse movement event
+        self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
     def set_image(self, image, cmap='gray'):
         """
@@ -55,6 +64,9 @@ class ImageViewer(QWidget):
         cmap : str
             Colormap to use
         """
+        # Store the raw image data
+        self.image_data = image
+
         # Clear previous image
         self.ax.clear()
 
@@ -75,6 +87,33 @@ class ImageViewer(QWidget):
             Image title
         """
         self.title_label.setText(title)
+
+    def on_mouse_move(self, event):
+        """
+        Handle mouse movement events to display position and intensity
+
+        Parameters:
+        -----------
+        event : MouseEvent
+            Matplotlib mouse event
+        """
+        if event.inaxes and self.image_data is not None:
+            # Get mouse position
+            x, y = int(event.xdata), int(event.ydata)
+
+            # Check if position is within image bounds
+            if (0 <= y < self.image_data.shape[0] and
+                0 <= x < self.image_data.shape[1]):
+
+                # Get raw intensity value (not normalized)
+                intensity = self.image_data[y, x]
+
+                # Update position label with raw value
+                self.position_label.setText(f"Position: x={x}, y={y} | Intensity: {intensity:.2f}")
+            else:
+                self.position_label.setText(f"Position: x={x}, y={y} | Out of bounds")
+        else:
+            self.position_label.setText("Position: -- | Intensity: --")
 
 
 class OverlayCanvas(QWidget):
@@ -118,8 +157,16 @@ class OverlayCanvas(QWidget):
         self.title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.title_label)
 
+        # Add position and intensity label
+        self.position_label = QLabel("Position: -- | Intensity: --")
+        self.position_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.position_label)
+
         # Set layout margins
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Connect mouse movement event
+        self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
     def clear(self):
         """Clear all overlay layers"""
@@ -142,6 +189,7 @@ class OverlayCanvas(QWidget):
         image : ndarray
             Background image
         """
+        # Store the raw image data without normalization
         self.background_image = image
 
     def add_contour(self, contour, color='r', linewidth=2.0):
@@ -212,7 +260,7 @@ class OverlayCanvas(QWidget):
             'marker_size': marker_size
         }
 
-    def add_sampling_regions(self, sampling_regions, valid_points=None):
+    def add_sampling_regions(self, sampling_regions, valid_points=None, recovered_by_rotation=None, exclude_endpoints=False):
         """
         Add sampling regions
 
@@ -222,10 +270,16 @@ class OverlayCanvas(QWidget):
             List of sampling region polygons
         valid_points : ndarray
             Boolean array indicating which points are valid
+        recovered_by_rotation : ndarray, optional
+            Boolean array indicating which valid points were recovered by rotation
+        exclude_endpoints : bool
+            Whether endpoints are excluded from analysis
         """
         self.sampling_regions = {
             'regions': sampling_regions,
-            'valid_points': valid_points
+            'valid_points': valid_points,
+            'recovered_by_rotation': recovered_by_rotation,
+            'exclude_endpoints': exclude_endpoints
         }
 
     def update_canvas(self):
@@ -235,7 +289,26 @@ class OverlayCanvas(QWidget):
 
         # Add background image if available
         if self.background_image is not None:
-            self.ax.imshow(self.background_image, cmap='gray')
+            # Get brightness settings if available
+            min_brightness = getattr(self, 'min_brightness', 0.0)
+            max_brightness = getattr(self, 'max_brightness', 1.0)
+
+            # Calculate display min/max for windowing
+            actual_min = np.min(self.background_image)
+            actual_max = np.max(self.background_image)
+            display_min = actual_min + min_brightness * (actual_max - actual_min)
+            display_max = actual_min + max_brightness * (actual_max - actual_min)
+
+            # Create display-only copy for visualization with window applied
+            display_image = np.clip(self.background_image.copy(), display_min, display_max)
+
+            # Normalize for display only
+            if display_max > display_min:
+                display_image = (display_image - display_min) / (display_max - display_min)
+            else:
+                display_image = np.zeros_like(self.background_image)
+
+            self.ax.imshow(display_image, cmap='gray')
 
             # If we have a mask, create an overlay
             if hasattr(self, 'mask') and self.mask is not None:
@@ -247,7 +320,7 @@ class OverlayCanvas(QWidget):
 
                 self.ax.imshow(red_mask)
 
-        # Add contour if available - MAKE SURE THIS WORKS
+        # Add contour if available
         if hasattr(self, 'contour_data') and self.contour_data is not None:
             # Debug print to ensure contour data exists
             print(f"Drawing contour with {len(self.contour_data)} points, color={self.contour_color}, width={self.contour_width}")
@@ -256,22 +329,36 @@ class OverlayCanvas(QWidget):
             self.ax.plot(self.contour_data[:, 1], self.contour_data[:, 0],
                         color=self.contour_color, linewidth=self.contour_width, zorder=10)
 
-
-
         # Add sampling regions if available
         if self.sampling_regions is not None:
             regions = self.sampling_regions['regions']
             valid_points = self.sampling_regions.get('valid_points')
+            recovered_by_rotation = self.sampling_regions.get('recovered_by_rotation')
+            exclude_endpoints = self.sampling_regions.get('exclude_endpoints', False)
 
             for i, region in enumerate(regions):
+                # Check if this is an excluded endpoint
+                is_endpoint = exclude_endpoints and (i == 0 or i == len(regions) - 1)
+
+                # Skip if this is an empty region (endpoint)
+                if is_endpoint or np.all(region == 0):
+                    continue
+
                 # Convert to x, y coordinates for plotting
                 polygon_y = region[:, 1]
                 polygon_x = region[:, 0]
 
                 if valid_points is not None:
                     if i < len(valid_points) and valid_points[i]:
-                        self.ax.fill(polygon_y, polygon_x, alpha=0.3, color='cyan')
+                        # Check if this region was recovered by rotation
+                        if recovered_by_rotation is not None and i < len(recovered_by_rotation) and recovered_by_rotation[i]:
+                            # Use a different color for regions recovered by rotation
+                            self.ax.fill(polygon_y, polygon_x, alpha=0.4, color='magenta')
+                        else:
+                            # Normal valid region
+                            self.ax.fill(polygon_y, polygon_x, alpha=0.3, color='cyan')
                     else:
+                        # Invalid region
                         self.ax.fill(polygon_y, polygon_x, alpha=0.15, color='gray')
                 else:
                     self.ax.fill(polygon_y, polygon_x, alpha=0.3, color='cyan')
@@ -337,6 +424,54 @@ class OverlayCanvas(QWidget):
         self.mask_opacity = opacity
 
         # The actual drawing will happen in update_canvas()
+
+    def on_mouse_move(self, event):
+        """
+        Handle mouse movement events to display position and intensity
+
+        Parameters:
+        -----------
+        event : MouseEvent
+            Matplotlib mouse event
+        """
+        if event.inaxes and self.background_image is not None:
+            # Get mouse position
+            x, y = int(event.xdata), int(event.ydata)
+
+            # Check if position is within image bounds
+            if (0 <= y < self.background_image.shape[0] and
+                0 <= x < self.background_image.shape[1]):
+
+                # Get raw intensity value
+                intensity = self.background_image[y, x]
+
+                # Get additional information if available
+                additional_info = ""
+
+                # Check for curvature data at this position
+                if self.curvature_points is not None:
+                    points = self.curvature_points['points']
+                    curvatures = self.curvature_points['curvatures']
+
+                    # Find closest point (simplified approach)
+                    closest_idx = None
+                    min_dist = float('inf')
+                    for i, point in enumerate(points):
+                        dist = (point[0] - y)**2 + (point[1] - x)**2
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_idx = i
+
+                    # If close enough to a contour point, show curvature
+                    if closest_idx is not None and min_dist < 100:  # Threshold for "close enough"
+                        additional_info = f" | Curvature: {curvatures[closest_idx]:.3f}"
+
+                # Update position label with raw intensity value
+                self.position_label.setText(f"Position: x={x}, y={y} | Intensity: {intensity:.2f}{additional_info}")
+            else:
+                self.position_label.setText(f"Position: x={x}, y={y} | Out of bounds")
+        else:
+            self.position_label.setText("Position: -- | Intensity: --")
 
 class ResultsTable(QTableWidget):
     """
@@ -516,6 +651,18 @@ class ParameterPanel(QWidget):
         self.coverage_spin.valueChanged.connect(self.on_parameter_changed)
         form_layout.addRow("Min. Cell Coverage:", self.coverage_spin)
 
+        # Try to rotate sample region
+        self.try_rotation_cb = QCheckBox("Try rotating rejected sampling regions")
+        self.try_rotation_cb.setChecked(False)  # Default to off
+        self.try_rotation_cb.toggled.connect(self.on_parameter_changed)
+        form_layout.addRow("", self.try_rotation_cb)
+
+        # Exclude endpoints
+        self.exclude_endpoints_cb = QCheckBox("Exclude first and last edge points")
+        self.exclude_endpoints_cb.setChecked(False)  # Default to off
+        self.exclude_endpoints_cb.toggled.connect(self.on_parameter_changed)
+        form_layout.addRow("", self.exclude_endpoints_cb)
+
         # Add temporal analysis mode selector
         self.temporal_mode_combo = QComboBox()
         self.temporal_mode_combo.addItems(["Current Frame", "Current-Previous Frames", "Current-Random Frames"])
@@ -551,6 +698,8 @@ class ParameterPanel(QWidget):
             'depth': self.depth_spin.value(),
             'width': self.width_spin.value(),
             'min_cell_coverage': self.coverage_spin.value(),
+            'try_rotation': self.try_rotation_cb.isChecked(),
+            'exclude_endpoints': self.exclude_endpoints_cb.isChecked(),
             'temporal_mode': self.temporal_mode_combo.currentText(),
             'reference_frame': self.reference_frame_spin.value(),
             'random_mode': self.random_mode_combo.currentText()
@@ -591,6 +740,12 @@ class ParameterPanel(QWidget):
         self.parameters['min_cell_coverage'] = self.coverage_spin.value()
         self.parameters['temporal_mode'] = self.temporal_mode_combo.currentText()
         self.parameters['reference_frame'] = self.reference_frame_spin.value()
+        self.parameters['exclude_endpoints'] = self.exclude_endpoints_cb.isChecked()
+
+        # Update try_rotation parameter
+        try_rotation_value = self.try_rotation_cb.isChecked()
+        self.parameters['try_rotation'] = try_rotation_value
+        print(f"DEBUG: Parameter try_rotation changed to {try_rotation_value}")
 
         # Update reference frame visibility
         self.update_reference_frame_visibility()
@@ -606,7 +761,8 @@ class ParameterPanel(QWidget):
         self.width_spin.setValue(5)
         self.coverage_spin.setValue(0.8)
         self.temporal_mode_combo.setCurrentIndex(0)  # Current Frame
-
+        self.try_rotation_cb.setChecked(False)  # Reset to default (off)
+        self.exclude_endpoints_cb.setChecked(False)  # Reset to default (off)
         # Don't reset reference frame as it depends on data
 
     def update_parameters(self, parameters):
@@ -641,6 +797,10 @@ class ParameterPanel(QWidget):
                 self.temporal_mode_combo.setCurrentIndex(index)
         if 'reference_frame' in parameters:
             self.reference_frame_spin.setValue(parameters['reference_frame'])
+        if 'try_rotation' in parameters:
+            self.try_rotation_cb.setChecked(parameters['try_rotation'])
+        if 'exclude_endpoints' in parameters:
+            self.exclude_endpoints_cb.setChecked(parameters['exclude_endpoints'])
 
         # Re-enable signals
         self.n_points_spin.blockSignals(False)

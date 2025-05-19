@@ -20,7 +20,8 @@ class CurvatureAnalyzer:
         pass
 
     def process_stack(self, image_path, mask_path, output_dir, n_points=100,
-                     depth=20, width=5, min_cell_coverage=0.8, progress_callback=None):
+                     depth=20, width=5, min_cell_coverage=0.8, try_rotation=False,
+                     exclude_endpoints=False, progress_callback=None):
         """
         Process a TIFF stack of microscope images and masks
 
@@ -40,6 +41,10 @@ class CurvatureAnalyzer:
             Width of the sampling rectangle
         min_cell_coverage : float
             Minimum fraction of the rectangle that must be inside the cell
+        try_rotation : bool
+            Whether to try rotating rejected sampling regions
+        exclude_endpoints : bool
+            Whether to exclude the first and last points in the analysis
         progress_callback : function
             Callback function for progress updates (percentage, message)
 
@@ -56,7 +61,9 @@ class CurvatureAnalyzer:
             "n_points": n_points,
             "depth": depth,
             "width": width,
-            "min_cell_coverage": min_cell_coverage
+            "min_cell_coverage": min_cell_coverage,
+            "try_rotation": try_rotation,
+            "exclude_endpoints": exclude_endpoints
         }
 
         # Initialize statistics dictionary
@@ -132,7 +139,7 @@ class CurvatureAnalyzer:
 
             # Analyze frame
             frame_results = self.analyze_frame(
-                image, mask, n_points, depth, width, min_cell_coverage)
+                image, mask, n_points, depth, width, min_cell_coverage, try_rotation, exclude_endpoints)
 
             # Store results
             results[frame_idx] = frame_results
@@ -214,7 +221,8 @@ class CurvatureAnalyzer:
 
         return results
 
-    def analyze_frame(self, image, mask, n_points=100, depth=20, width=5, min_cell_coverage=0.8):
+    def analyze_frame(self, image, mask, n_points=100, depth=20, width=5, min_cell_coverage=0.8,
+                      try_rotation=False, exclude_endpoints=False):
         """
         Analyze a single frame
 
@@ -232,6 +240,10 @@ class CurvatureAnalyzer:
             Width of the sampling rectangle
         min_cell_coverage : float
             Minimum fraction of the rectangle that must be inside the cell
+        try_rotation : bool
+            Whether to try rotating rejected sampling regions
+        exclude_endpoints : bool
+            Whether to exclude the first and last points in the analysis
 
         Returns:
         --------
@@ -254,8 +266,8 @@ class CurvatureAnalyzer:
         normals = self.calculate_inward_normal(points, mask)
 
         # Measure intensity with cell coverage check
-        intensities, sampling_regions, valid_points = self.measure_intensity(
-            image, mask, points, normals, depth, width, min_cell_coverage
+        intensities, sampling_regions, valid_points, recovered_by_rotation = self.measure_intensity(
+            image, mask, points, normals, depth, width, min_cell_coverage, try_rotation, exclude_endpoints
         )
 
         # Store results
@@ -266,7 +278,9 @@ class CurvatureAnalyzer:
             "intensities": intensities,
             "sampling_regions": sampling_regions,
             "valid_points": valid_points,
-            "contour_data": contour  # Make sure contour data is included
+            "contour_data": contour,
+            "recovered_by_rotation": recovered_by_rotation,
+            "exclude_endpoints": exclude_endpoints
         }
 
         return results
@@ -473,6 +487,7 @@ class CurvatureAnalyzer:
         max_magnitude = np.max(magnitude_curvatures)
         if max_magnitude > 0:
             normalized_curvatures = sign_curvatures * (magnitude_curvatures / max_magnitude)
+            #normalized_curvatures = sign_curvatures * (magnitude_curvatures) #no normalization
         else:
             normalized_curvatures = sign_curvatures * 0
 
@@ -538,7 +553,8 @@ class CurvatureAnalyzer:
 
         return normals
 
-    def measure_intensity(self, image, mask, points, normals, depth=20, width=5, min_cell_coverage=0.8):
+    def measure_intensity(self, image, mask, points, normals, depth=20, width=5, min_cell_coverage=0.8,
+                          try_rotation=False, exclude_endpoints=False):
         """
         Measure mean intensity within rectangular regions extending from each point.
 
@@ -558,20 +574,43 @@ class CurvatureAnalyzer:
             Width of the rectangle
         min_cell_coverage : float
             Minimum fraction of the rectangle that must be inside the cell
+        try_rotation : bool
+            Whether to try rotating rejected sampling regions by 180° and recheck coverage
+        exclude_endpoints : bool
+            Whether to exclude the first and last points in the analysis
 
         Returns:
         --------
-        (intensities, sampling_regions, valid_points) : tuple
-            Tuple of intensity measurements, sampling regions and validity flags
+        (intensities, sampling_regions, valid_points, recovered_by_rotation) : tuple
+            Tuple of intensity measurements, sampling regions, validity flags, and rotation recovery flags
         """
         n_points = len(points)
         intensities = np.full(n_points, np.nan)  # Initialize with NaN
         sampling_regions = []
         valid_points = np.zeros(n_points, dtype=bool)
+        recovered_by_rotation = np.zeros(n_points, dtype=bool)
+
+        # Add counters for debugging
+        total_regions = 0
+        initially_valid_regions = 0
+        regions_tried_rotation = 0
+        regions_recovered_by_rotation = 0
+        excluded_endpoints = 0
 
         image_shape = image.shape
 
+        print(f"DEBUG: Starting intensity measurement with try_rotation={try_rotation}, exclude_endpoints={exclude_endpoints}")
+
         for i in range(n_points):
+            # Check if this is an endpoint that should be excluded
+            if exclude_endpoints and (i == 0 or i == n_points - 1):
+                print(f"DEBUG: Point {i}: Excluded as endpoint")
+                excluded_endpoints += 1
+                # Add empty region for visualization consistency
+                sampling_regions.append(np.zeros((4, 2)))
+                continue
+
+            total_regions += 1
             p = points[i]
             normal = normals[i]
 
@@ -604,16 +643,88 @@ class CurvatureAnalyzer:
                 cell_pixels = np.sum(mask[rr, cc])
                 cell_coverage = cell_pixels / total_pixels
 
+                # Debug log the original coverage
+                if i % 10 == 0:  # Only print every 10th point to avoid too many logs
+                    print(f"DEBUG: Point {i}: Initial coverage: {cell_coverage:.3f} (min required: {min_cell_coverage})")
+
                 # Only include points with sufficient cell coverage
                 if cell_coverage >= min_cell_coverage:
                     # Calculate mean intensity
                     intensities[i] = np.mean(image[rr, cc])
                     valid_points[i] = True
+                    initially_valid_regions += 1
+
+                # If coverage is insufficient and rotation is enabled, try rotating the region
+                elif try_rotation:
+                    regions_tried_rotation += 1
+                    # Print debug info
+                    print(f"DEBUG: Point {i}: Trying rotation. Original coverage: {cell_coverage:.3f}")
+
+                    # Rotate normal vector 180 degrees
+                    rotated_normal = -normal
+
+                    # Recalculate end point with rotated normal
+                    rotated_end_point = p + depth * rotated_normal
+
+                    # Calculate corner points of the rotated rectangle
+                    rotated_corner1 = p + width/2 * perp
+                    rotated_corner2 = p - width/2 * perp
+                    rotated_corner3 = rotated_end_point - width/2 * perp
+                    rotated_corner4 = rotated_end_point + width/2 * perp
+
+                    # Create a polygon for the rotated rectangle
+                    rotated_vertices = np.array([rotated_corner1, rotated_corner4, rotated_corner3, rotated_corner2])
+
+                    # Get all pixels within the rotated polygon
+                    rotated_rr, rotated_cc = draw.polygon(rotated_vertices[:, 0], rotated_vertices[:, 1], image_shape)
+
+                    # Check if any pixels are within bounds
+                    rotated_valid_pixels = (rotated_rr >= 0) & (rotated_rr < image_shape[0]) & (rotated_cc >= 0) & (rotated_cc < image_shape[1])
+                    if np.any(rotated_valid_pixels):
+                        rotated_rr = rotated_rr[rotated_valid_pixels]
+                        rotated_cc = rotated_cc[rotated_valid_pixels]
+
+                        # Check cell coverage of rotated region
+                        rotated_total_pixels = len(rotated_rr)
+                        rotated_cell_pixels = np.sum(mask[rotated_rr, rotated_cc])
+                        rotated_cell_coverage = rotated_cell_pixels / rotated_total_pixels
+
+                        # Debug log the rotated coverage
+                        print(f"DEBUG: Point {i}: After rotation coverage: {rotated_cell_coverage:.3f}")
+
+                        # If rotated region has sufficient coverage, use it
+                        if rotated_cell_coverage >= min_cell_coverage:
+                            intensities[i] = np.mean(image[rotated_rr, rotated_cc])
+                            valid_points[i] = True
+                            recovered_by_rotation[i] = True  # Mark as recovered by rotation
+                            regions_recovered_by_rotation += 1
+                            print(f"DEBUG: Point {i}: Successfully recovered by rotation!")
+
+                            # Use the rotated vertices for visualization
+                            vertices = rotated_vertices
 
             # Save sampling region for visualization (even if not valid)
             sampling_regions.append(vertices)
 
-        return intensities, sampling_regions, valid_points
+        # Print summary stats
+        print(f"DEBUG: Intensity measurement summary:")
+        print(f"DEBUG: Total regions: {total_regions}")
+        if exclude_endpoints:
+            print(f"DEBUG: Excluded endpoints: {excluded_endpoints}")
+        print(f"DEBUG: Initially valid regions: {initially_valid_regions} ({initially_valid_regions/total_regions*100:.1f}%)")
+        if try_rotation:
+            print(f"DEBUG: Regions that needed rotation: {regions_tried_rotation}")
+
+            # Check to avoid division by zero
+            if regions_tried_rotation > 0:
+                recovery_percentage = regions_recovered_by_rotation/regions_tried_rotation*100
+                print(f"DEBUG: Regions recovered by rotation: {regions_recovered_by_rotation} ({recovery_percentage:.1f}% of tried)")
+            else:
+                print(f"DEBUG: Regions recovered by rotation: {regions_recovered_by_rotation} (0.0% - no regions needed rotation)")
+
+            print(f"DEBUG: Total valid regions after rotation: {initially_valid_regions + regions_recovered_by_rotation} ({(initially_valid_regions + regions_recovered_by_rotation)/total_regions*100:.1f}%)")
+
+        return intensities, sampling_regions, valid_points, recovered_by_rotation
 
     def detect_edge_movement(self, current_contour, previous_contour, current_mask, previous_mask):
         """
