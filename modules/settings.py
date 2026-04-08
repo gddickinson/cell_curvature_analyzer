@@ -1,8 +1,37 @@
 from PyQt5.QtCore import QSettings, QSize, QPoint
 
+
 class SettingsManager:
     """
-    Class for managing application settings
+    Class for managing application settings.
+
+    Persists window state, analysis parameters, visualization settings, and
+    export settings using Qt's QSettings backend.
+
+    Analysis parameters:
+        n_points (int): Number of equidistant sample points along the cell edge.
+        depth (int): Depth (in pixels) of the sampling rectangle extending
+            inward from the cell edge, used for intensity measurement.
+        width (int): Width (in pixels) of the sampling rectangle centered
+            on each edge point.
+        min_cell_coverage (float): Minimum fraction (0.0-1.0) of the sampling
+            rectangle area that must fall inside the cell mask for the point
+            to be considered valid.
+
+    Visualization settings:
+        curvature_cmap (str): Matplotlib colormap name for curvature display.
+        intensity_cmap (str): Matplotlib colormap name for intensity display.
+        marker_size (int): Size of scatter plot markers on the cell edge.
+        contour_width (float): Line width for drawing the cell contour.
+
+    Export settings:
+        directory (str): Default directory for saving exported results.
+        prefix (str): Filename prefix for exported files.
+        export_images (bool): Whether to export overlay images.
+        export_raw_data (bool): Whether to export raw numerical data (CSV).
+        export_stats (bool): Whether to export summary statistics (JSON).
+        export_figures (bool): Whether to export matplotlib figures.
+        export_report (bool): Whether to export a combined analysis report.
     """
     
     def __init__(self):

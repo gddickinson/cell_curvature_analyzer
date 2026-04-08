@@ -1,3 +1,6 @@
 151_2019_07_29_TIRF_mKera_scratch_1_MMStack_Pos7_piezo1.tif
 151_2019_07_29_TIRF_mKera_scratch_Pos7_DIC_Mask_test.tif
 /data
+/tests/__pycache__
+/standalone/forJinghao/modular/utils/__pycache__
+/modules/__pycache__

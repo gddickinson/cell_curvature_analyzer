@@ -1,0 +1,209 @@
+================================================================================
+CELL EDGE MOVEMENT ANALYSIS - MODULAR PIPELINE
+================================================================================
+
+Author: George Dickinson
+Date: November 4, 2025
+
+This modular pipeline breaks down your movement analysis into testable components.
+
+================================================================================
+DIRECTORY STRUCTURE
+================================================================================
+
+cell_movement_analysis/
+├── utils/                      # Core utility modules
+│   ├── config.py              # Configuration management
+│   ├── edge_detection.py      # Edge & movement detection
+│   ├── intensity_sampling.py  # Intensity sampling
+│   └── visualization.py       # Plotting functions
+├── 01_load_and_validate.py   # Step 1: Load data
+├── 02_detect_edges.py         # Step 2: Detect edges
+├── 03_calculate_movement.py  # Step 3: Calculate movement
+├── 04_sample_intensity.py    # Step 4 (to be completed)
+├── 05_correlate_movement_intensity.py  # Step 5 (to be completed)
+├── 06_generate_visualizations.py  # Step 6 (to be completed)
+├── 07_export_results.py      # Step 7 (to be completed)
+├── run_single_analysis.py    # Run complete workflow
+└── run_parameter_sweep.py    # Parameter testing (to be completed)
+
+================================================================================
+QUICK START TESTING
+================================================================================
+
+1. TEST UTILITY MODULES (with visualizations)
+   
+   python utils/config.py --test --visualize
+   python utils/edge_detection.py --test --visualize
+   python utils/intensity_sampling.py --test --visualize
+   python utils/visualization.py --test --visualize
+
+2. TEST WITH YOUR DATA
+
+   python 01_load_and_validate.py --test --test-data /path/to/your/data --visualize
+   python 02_detect_edges.py --test --visualize
+
+3. RUN FULL ANALYSIS
+
+   python run_single_analysis.py \\
+       /path/to/images.tif \\
+       /path/to/masks.tif \\
+       output_directory \\
+       --visualize
+
+================================================================================
+INDIVIDUAL STEP USAGE
+================================================================================
+
+STEP 1: Load and Validate Data
+-------------------------------
+python 01_load_and_validate.py <image_path> <mask_path> <output_dir> [--visualize]
+
+Outputs:
+  - loaded_data.npz (images and masks)
+  - data_info.json (metadata)
+  - data_visualization.png (if --visualize)
+
+STEP 2: Detect Edges
+---------------------
+python 02_detect_edges.py <input_dir> <output_dir> [--visualize]
+
+Requires: loaded_data.npz from Step 1
+
+Outputs:
+  - edges.npz (contours for each frame)
+  - edge_statistics.json
+  - edge_detection.png (if --visualize)
+
+STEP 3: Calculate Movement
+---------------------------
+python 03_calculate_movement.py <input_dir> <output_dir> [--config config.json] [--visualize]
+
+Requires: loaded_data.npz, edges.npz
+
+Outputs:
+  - movement_data.npz
+  - movement_summary.json
+
+STEPS 4-7: (Templates to be completed)
+---------------------------------------
+These follow similar patterns and will process:
+  - Step 4: Sample intensity at edge points
+  - Step 5: Correlate movement with intensity
+  - Step 6: Generate comprehensive visualizations
+  - Step 7: Export final CSV and JSON results
+
+================================================================================
+CONFIGURATION
+================================================================================
+
+Create custom configuration files in JSON format:
+
+{
+  "analysis": {
+    "n_points": 12,              # Number of sampling points
+    "depth": 200,                # Sampling rectangle depth
+    "width": 75,                 # Sampling rectangle width
+    "min_cell_coverage": 0.8,    # Min overlap with mask
+    "movement_threshold": 0.1,   # Movement classification threshold
+    "temporal_direction": "past" # "past" or "future"
+  },
+  "output": {
+    "save_detailed_csv": true,
+    "save_summary_json": true,
+    "save_correlation_plots": true,
+    "save_frame_plots": true
+  },
+  "visualization": {
+    "plot_every_nth_frame": 10,
+    "movement_cmap": "RdBu_r",
+    "intensity_cmap": "viridis",
+    "figure_dpi": 150
+  }
+}
+
+Save as config.json and use with:
+python 03_calculate_movement.py input output --config config.json
+
+================================================================================
+UNIT TESTING
+================================================================================
+
+Every module has built-in unit tests:
+
+# Test without visualization
+python utils/config.py --test
+
+# Test with visualization  
+python utils/edge_detection.py --test --visualize
+
+# Test with your own data
+python 01_load_and_validate.py --test --test-data /your/data/dir --visualize
+
+The tests create:
+  - Synthetic data for basic validation
+  - Visual outputs (PNG files) when --visualize is used
+  - Can optionally use your real data with --test-data
+
+================================================================================
+BENEFITS OF THIS ARCHITECTURE
+================================================================================
+
+✓ Modularity: Test each step independently
+✓ Flexibility: Easy to swap algorithms or parameters
+✓ Debugging: Inspect intermediate outputs at each stage
+✓ Reproducibility: Clear data provenance
+✓ Scalability: Can parallelize batch processing
+✓ Validation: Visual inspection at every step
+
+================================================================================
+INTERMEDIATE DATA FILES
+================================================================================
+
+loaded_data.npz
+  - images: (N, H, W) array
+  - masks: (N, H, W) array
+
+edges.npz
+  - frame_0, frame_1, ...: (M, 2) contour arrays
+
+movement_data.npz
+  - transition_*_movement_score: float
+  - transition_*_movement_type: string
+  - transition_*_movement_map: (H, W) array
+  - transition_*_displacements: 1D array
+  - transition_*_x_positions: 1D array
+
+(intensity_data.npz, correlation_data.npz to be added in steps 4-5)
+
+================================================================================
+NEXT STEPS TO COMPLETE
+================================================================================
+
+The current implementation includes:
+  ✓ All utility modules (config, edge_detection, intensity_sampling, visualization)
+  ✓ Steps 1-3 (load, edges, movement) with full unit tests
+  ✓ Basic orchestration (run_single_analysis.py)
+
+To complete the pipeline, you'll need to:
+  □ Step 4: Implement intensity sampling script
+  □ Step 5: Implement correlation analysis script  
+  □ Step 6: Implement visualization generation script
+  □ Step 7: Implement results export script
+  □ Add run_parameter_sweep.py for parameter testing
+  □ Add run_batch_files.py for multi-file processing
+
+All the core functions are already in the utils/ modules, so steps 4-7 
+mainly need to orchestrate those functions similar to steps 1-3.
+
+================================================================================
+CONTACT
+================================================================================
+
+For questions or issues with this pipeline:
+- Review the unit test outputs
+- Check intermediate .npz files with numpy.load()
+- Inspect JSON files for metadata
+- Use --visualize flag liberally for debugging
+
+================================================================================

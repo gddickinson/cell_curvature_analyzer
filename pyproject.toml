@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "cell-curvature-analyzer"
+version = "1.0.0"
+description = "GUI application for analyzing cell-membrane curvature and PIEZO1 protein locations"
+readme = "README.md"
+requires-python = ">=3.7"
+keywords = ["cell", "curvature", "membrane", "PIEZO1", "microscopy", "fluorescence"]
+dependencies = [
+    "numpy>=1.19.0",
+    "matplotlib>=3.3.0",
+    "scipy>=1.5.0",
+    "scikit-image>=0.17.0",
+    "pandas>=1.1.0",
+    "PyQt5>=5.15.0",
+    "tifffile>=2020.9.3",
+]
+
+[project.scripts]
+cell-curvature-analyzer = "main:main"
+
+[tool.setuptools.packages.find]
+include = ["modules*"]

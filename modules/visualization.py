@@ -144,14 +144,14 @@ class VisualizationManager:
         # Refresh canvas
         canvas.draw()
 
-    def plot_correlation(self, curvatures, intensities, valid_points, figure, canvas, title=None):
+    def plot_correlation(self, metric_data, intensities, valid_points, figure, canvas, title=None, metric_name="Metric"):
         """
-        Plot correlation between curvature and intensity
+        Plot correlation between metric and intensity
 
         Parameters:
         -----------
-        curvatures : ndarray
-            Array of curvature values
+        metric_data : ndarray
+            Array of metric values (curvature or movement)
         intensities : ndarray
             Array of intensity values
         valid_points : ndarray
@@ -162,26 +162,28 @@ class VisualizationManager:
             Canvas to render the figure
         title : str, optional
             Plot title
+        metric_name : str, optional
+            Name of the metric for axis labels
         """
         # Clear figure
         figure.clear()
         ax = figure.add_subplot(111)
 
         # Filter data for valid points
-        valid_curvatures = curvatures[valid_points]
+        valid_metric = metric_data[valid_points]
         valid_intensities = intensities[valid_points]
 
         # Plot scatter points
-        ax.scatter(valid_curvatures, valid_intensities, alpha=0.7)
+        ax.scatter(valid_metric, valid_intensities, alpha=0.7)
 
         # Add regression line if there are enough points
-        if len(valid_curvatures) > 1:
+        if len(valid_metric) > 1:
             # Calculate regression
             slope, intercept, r_value, p_value, std_err = stats.linregress(
-                valid_curvatures, valid_intensities)
+                valid_metric, valid_intensities)
 
             # Create line data
-            x_line = np.linspace(min(valid_curvatures), max(valid_curvatures), 100)
+            x_line = np.linspace(min(valid_metric), max(valid_metric), 100)
             y_line = slope * x_line + intercept
 
             # Plot line
@@ -189,20 +191,20 @@ class VisualizationManager:
 
             # Set title with correlation stats
             if title:
-                title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_curvatures)}"
+                title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_metric)}"
             else:
-                title = f"Curvature-Intensity Correlation\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_curvatures)}"
+                title = f"{metric_name}-Intensity Correlation\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_metric)}"
         else:
             if title:
                 title += "\nInsufficient data for regression"
             else:
-                title = "Curvature-Intensity Correlation\nInsufficient data for regression"
+                title = f"{metric_name}-Intensity Correlation\nInsufficient data for regression"
 
         # Add labels and title
-        ax.set_xlabel('Curvature')
+        ax.set_xlabel(metric_name)
         ax.set_ylabel('Intensity')
         ax.set_title(title)
-        if len(valid_curvatures) > 1:
+        if len(valid_metric) > 1:
             ax.legend()
 
         # Refresh canvas

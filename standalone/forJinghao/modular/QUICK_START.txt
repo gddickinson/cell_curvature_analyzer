@@ -1,0 +1,185 @@
+================================================================================
+QUICK START GUIDE - Modular Cell Movement Analysis Pipeline
+================================================================================
+
+🎯 WHAT YOU HAVE:
+
+✅ Complete utility modules (utils/)
+   - config.py: Configuration management with validation
+   - edge_detection.py: Edge detection + movement calculation  
+   - intensity_sampling.py: PIEZO1 intensity sampling
+   - visualization.py: All plotting functions
+
+✅ Processing scripts (Steps 1-3 implemented)
+   - 01_load_and_validate.py: Load and validate TIFF stacks
+   - 02_detect_edges.py: Detect cell edges from masks
+   - 03_calculate_movement.py: Calculate movement between frames
+
+✅ Orchestration
+   - run_single_analysis.py: Run complete workflow (steps 1-3)
+
+✅ All modules have built-in unit tests with --test flag
+✅ All modules support --visualize flag for visual validation
+✅ All modules support --test-data flag for testing with your data
+
+================================================================================
+🚀 IMMEDIATE TESTING (5 minutes):
+================================================================================
+
+# 1. Test configuration module
+python utils/config.py --test --visualize
+
+# 2. Test edge detection with visualization
+python utils/edge_detection.py --test --visualize
+
+# 3. Test intensity sampling
+python utils/intensity_sampling.py --test --visualize
+
+# 4. Test with synthetic data pipeline
+python 01_load_and_validate.py --test --visualize
+
+# 5. Test edge detection script  
+python 02_detect_edges.py --test --visualize
+
+Each test creates PNG visualizations for easy evaluation!
+
+================================================================================
+📊 USE WITH YOUR DATA:
+================================================================================
+
+# Option 1: Run individual steps
+python 01_load_and_validate.py \\
+    /path/to/piezo1_images.tif \\
+    /path/to/cell_masks.tif \\
+    step1_output \\
+    --visualize
+
+python 02_detect_edges.py step1_output step2_output --visualize
+
+python 03_calculate_movement.py step2_output step3_output --visualize
+
+# Option 2: Run complete pipeline (recommended)
+python run_single_analysis.py \\
+    /path/to/piezo1_images.tif \\
+    /path/to/cell_masks.tif \\
+    my_results \\
+    --visualize
+
+================================================================================
+🔧 CUSTOMIZE PARAMETERS:
+================================================================================
+
+Create a JSON config file (e.g., my_config.json):
+
+{
+  "analysis": {
+    "n_points": 15,
+    "depth": 250,
+    "width": 80,
+    "movement_threshold": 0.15,
+    "temporal_direction": "past"
+  }
+}
+
+Then use it:
+python 03_calculate_movement.py input output --config my_config.json
+
+================================================================================
+📁 WHAT GETS CREATED:
+================================================================================
+
+Step 1 Output:
+  - loaded_data.npz (images + masks as NumPy arrays)
+  - data_info.json (metadata and validation report)
+  - data_visualization.png (sample frames)
+
+Step 2 Output:
+  - edges.npz (contours for each frame)
+  - edge_statistics.json (edge lengths, empty frames)
+  - edge_detection.png (edges overlaid on masks)
+
+Step 3 Output:
+  - movement_data.npz (movement scores, types, maps)
+  - movement_summary.json (statistics)
+
+All .npz files can be loaded with: np.load('file.npz')
+
+================================================================================
+✨ KEY FEATURES:
+================================================================================
+
+✓ Each step is INDEPENDENT - test one at a time
+✓ All intermediate data is SAVED - inspect at any stage  
+✓ Visual OUTPUT for every step - see what's happening
+✓ Built-in UNIT TESTS - validate with synthetic data
+✓ Your ORIGINAL SCRIPT logic preserved - same algorithms
+
+================================================================================
+🎨 VISUALIZATION EXAMPLES:
+================================================================================
+
+The included test visualizations show:
+
+edge_detection_unit_test.png:
+  - Synthetic mask with detected contour
+  - Movement between two frames
+  - Displacement profiles
+  - Movement map visualization
+
+Run any test with --visualize to see similar outputs for your data!
+
+================================================================================
+📖 NEXT STEPS:
+================================================================================
+
+1. Test the modules work: Run unit tests (5 min)
+2. Test with your data: Use your TIFF files (10 min)
+3. Examine outputs: Check .npz and .json files (5 min)
+4. Customize parameters: Create config.json (5 min)
+5. Complete the pipeline: Add steps 4-7 as needed
+
+Steps 4-7 templates can follow the same pattern as steps 1-3.
+All the core functions already exist in utils/ modules!
+
+================================================================================
+💡 TIPS:
+================================================================================
+
+- Use --visualize liberally during development
+- Check .json files for quick statistics
+- Load .npz files in Python to inspect arrays
+- Start with a few frames, then scale up
+- Each step is ~100-200 lines - easy to understand
+
+================================================================================
+🐛 DEBUGGING:
+================================================================================
+
+If something fails:
+1. Check the JSON metadata files for warnings
+2. Run the failing step with --visualize
+3. Load the .npz file and inspect arrays
+4. Run the unit test for that module
+5. Check USAGE_GUIDE.txt for details
+
+================================================================================
+📬 WHAT'S INCLUDED:
+================================================================================
+
+✅ All utility modules with full functionality
+✅ Steps 1-3 with complete implementation
+✅ Unit tests for every module
+✅ Visualization generation
+✅ Documentation (this file + USAGE_GUIDE.txt)
+
+⏳ To be completed (following same patterns):
+   - Step 4: Sample intensity (use intensity_sampling.py utils)
+   - Step 5: Correlate (combine movement + intensity data)
+   - Step 6: Generate visualizations (use visualization.py utils)
+   - Step 7: Export CSV/JSON (compile all results)
+   - Parameter sweep script
+   - Batch processing script
+
+================================================================================
+Have fun with modular analysis! 🔬
+================================================================================

@@ -1,0 +1,34 @@
+{
+  "analysis": {
+    "n_points": 20,
+    "depth": 300,
+    "width": 100,
+    "min_cell_coverage": 0.8,
+    "try_rotation": true,
+    "movement_threshold": 0.2,
+    "min_movement_pixels": 5,
+    "exclude_endpoints": true,
+    "temporal_direction": "future"
+  },
+  "output": {
+    "save_detailed_csv": true,
+    "save_summary_json": true,
+    "save_correlation_plots": true,
+    "save_frame_plots": true
+  },
+  "visualization": {
+    "plot_every_nth_frame": 10,
+    "plot_every_nth_sampling_point": 1,
+    "save_sampling_plots": true,
+    "save_intensity_plots": true,
+    "save_movement_plots": true,
+    "save_edge_transition_plots": true,
+    "save_movement_overlay_plots": true,
+    "save_intensity_overlay_plots": true,
+    "save_movement_type_correlation": true,
+    "movement_cmap": "RdBu_r",
+    "intensity_cmap": "viridis",
+    "marker_size": 30,
+    "figure_dpi": 150
+  }
+}

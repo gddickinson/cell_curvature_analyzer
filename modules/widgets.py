@@ -282,6 +282,66 @@ class OverlayCanvas(QWidget):
             'exclude_endpoints': exclude_endpoints
         }
 
+
+    def add_movement_visualization(self, points, movement_scores, colors, marker_size=10):
+        """
+        Add movement visualization to the overlay
+
+        Parameters:
+        -----------
+        points : ndarray
+            Array of contour points
+        movement_scores : ndarray
+            Array of movement scores
+        colors : list
+            List of colors for each point
+        marker_size : int
+            Size of markers
+        """
+        if not hasattr(self, 'ax') or self.ax is None:
+            return
+
+        try:
+            # Add points with colors representing movement
+            self.ax.scatter(points[:, 1], points[:, 0], c=colors,
+                          s=marker_size, marker='o', zorder=15)
+
+            # Add arrows indicating movement direction and magnitude
+            for i, (point, score) in enumerate(zip(points, movement_scores)):
+                if abs(score) > 0.05:  # Only show arrows for significant movement
+                    # Skip if this is the last or first point
+                    if i == 0 or i == len(points) - 1:
+                        continue
+
+                    # Get normal direction (perpendicular to contour)
+                    prev_idx = (i - 1) % len(points)
+                    next_idx = (i + 1) % len(points)
+
+                    # Vector along contour
+                    tangent = points[next_idx] - points[prev_idx]
+                    tangent_norm = np.linalg.norm(tangent)
+
+                    if tangent_norm > 1e-10:
+                        tangent = tangent / tangent_norm
+
+                        # Normal vector (perpendicular to tangent)
+                        normal = np.array([-tangent[1], tangent[0]])
+
+                        # Scale by movement score
+                        arrow_size = min(abs(score) * 10, 20)  # Limit maximum size
+                        if score < 0:
+                            normal = -normal
+
+                        # Draw arrow
+                        self.ax.arrow(point[1], point[0],
+                                    normal[1] * arrow_size, normal[0] * arrow_size,
+                                    head_width=2, head_length=3, fc=colors[i], ec=colors[i],
+                                    zorder=20)
+        except Exception as e:
+            # Log error but continue
+            print(f"Error adding movement visualization: {str(e)}")
+
+
     def update_canvas(self):
         """Update the canvas with all layers"""
         # Clear previous content
@@ -663,6 +723,27 @@ class ParameterPanel(QWidget):
         self.exclude_endpoints_cb.toggled.connect(self.on_parameter_changed)
         form_layout.addRow("", self.exclude_endpoints_cb)
 
+        # Angular distribution
+        self.angular_distribution_cb = QCheckBox("Angular distribution of sample points")
+        self.angular_distribution_cb.setChecked(False)  # Default to off
+        self.angular_distribution_cb.toggled.connect(self.on_parameter_changed)
+        self.angular_distribution_cb.setToolTip("Distribute points evenly by angle rather than by contour distance")
+        form_layout.addRow("", self.angular_distribution_cb)
+
+        # Axis-based distribution
+        self.axis_based_distribution_cb = QCheckBox("Axis-based distribution (reduce bunching)")
+        self.axis_based_distribution_cb.setChecked(False)  # Default to off
+        self.axis_based_distribution_cb.toggled.connect(self.on_parameter_changed)
+        self.axis_based_distribution_cb.setToolTip("Distribute points evenly along image axes to reduce bunching in extrusions")
+        form_layout.addRow("", self.axis_based_distribution_cb)
+
+        # X-axis based distribution
+        self.x_axis_distribution_cb = QCheckBox("X-axis distribution (horizontal spacing)")
+        self.x_axis_distribution_cb.setChecked(False)  # Default to off
+        self.x_axis_distribution_cb.toggled.connect(self.on_parameter_changed)
+        self.x_axis_distribution_cb.setToolTip("Distribute points evenly along x-axis to reduce bunching")
+        form_layout.addRow("", self.x_axis_distribution_cb)
+
         # Add temporal analysis mode selector
         self.temporal_mode_combo = QComboBox()
         self.temporal_mode_combo.addItems(["Current Frame", "Current-Previous Frames", "Current-Random Frames"])
@@ -702,7 +783,10 @@ class ParameterPanel(QWidget):
             'exclude_endpoints': self.exclude_endpoints_cb.isChecked(),
             'temporal_mode': self.temporal_mode_combo.currentText(),
             'reference_frame': self.reference_frame_spin.value(),
-            'random_mode': self.random_mode_combo.currentText()
+            'random_mode': self.random_mode_combo.currentText(),
+            'angularr_distribution': self.angular_distribution_cb.isChecked(),
+            'axis_based_distribution': self.axis_based_distribution_cb.isChecked(),
+            'x_axis_distribution': self.x_axis_distribution_cb.isChecked()
         }
 
 
@@ -741,6 +825,50 @@ class ParameterPanel(QWidget):
         self.parameters['temporal_mode'] = self.temporal_mode_combo.currentText()
         self.parameters['reference_frame'] = self.reference_frame_spin.value()
         self.parameters['exclude_endpoints'] = self.exclude_endpoints_cb.isChecked()
+        self.parameters['x_axis_distribution'] = self.x_axis_distribution_cb.isChecked()
+
+        # Make distribution options mutually exclusive
+        if self.sender() == self.x_axis_distribution_cb and self.x_axis_distribution_cb.isChecked():
+            # Turn off other distribution options
+            self.angular_distribution_cb.blockSignals(True)
+            self.angular_distribution_cb.setChecked(False)
+            self.angular_distribution_cb.blockSignals(False)
+
+            self.axis_based_distribution_cb.blockSignals(True)
+            self.axis_based_distribution_cb.setChecked(False)
+            self.axis_based_distribution_cb.blockSignals(False)
+
+            print("DEBUG: X-axis distribution selected, turning off other distribution methods")
+
+        elif self.sender() == self.angular_distribution_cb and self.angular_distribution_cb.isChecked():
+            # Turn off other distribution options
+            self.x_axis_distribution_cb.blockSignals(True)
+            self.x_axis_distribution_cb.setChecked(False)
+            self.x_axis_distribution_cb.blockSignals(False)
+
+            self.axis_based_distribution_cb.blockSignals(True)
+            self.axis_based_distribution_cb.setChecked(False)
+            self.axis_based_distribution_cb.blockSignals(False)
+
+            print("DEBUG: Angular distribution selected, turning off other distribution methods")
+
+        elif self.sender() == self.axis_based_distribution_cb and self.axis_based_distribution_cb.isChecked():
+            # Turn off other distribution options
+            self.x_axis_distribution_cb.blockSignals(True)
+            self.x_axis_distribution_cb.setChecked(False)
+            self.x_axis_distribution_cb.blockSignals(False)
+
+            self.angular_distribution_cb.blockSignals(True)
+            self.angular_distribution_cb.setChecked(False)
+            self.angular_distribution_cb.blockSignals(False)
+
+            print("DEBUG: Axis-based distribution selected, turning off other distribution methods")
+
+        # Update the parameters
+        self.parameters['x_axis_distribution'] = self.x_axis_distribution_cb.isChecked()
+        self.parameters['angular_distribution'] = self.angular_distribution_cb.isChecked()
+        self.parameters['axis_based_distribution'] = self.axis_based_distribution_cb.isChecked()
+
 
         # Update try_rotation parameter
         try_rotation_value = self.try_rotation_cb.isChecked()
@@ -763,6 +891,9 @@ class ParameterPanel(QWidget):
         self.temporal_mode_combo.setCurrentIndex(0)  # Current Frame
         self.try_rotation_cb.setChecked(False)  # Reset to default (off)
         self.exclude_endpoints_cb.setChecked(False)  # Reset to default (off)
+        self.angular_distribution_cb.setChecked(False)  # Reset to default (off)
+        self.axis_based_distribution_cb.setChecked(False)  # Reset to default (off)
+        self.x_axis_distribution_cb.setChecked(False)  # Reset to default (off)
         # Don't reset reference frame as it depends on data
 
     def update_parameters(self, parameters):
@@ -801,6 +932,13 @@ class ParameterPanel(QWidget):
             self.try_rotation_cb.setChecked(parameters['try_rotation'])
         if 'exclude_endpoints' in parameters:
             self.exclude_endpoints_cb.setChecked(parameters['exclude_endpoints'])
+        if 'angular_distribution' in parameters:
+            self.angular_distribution_cb.setChecked(parameters['angular_distribution'])
+        if 'axis_based_distribution' in parameters:
+            self.axis_based_distribution_cb.setChecked(parameters['axis_based_distribution'])
+        if 'x_axis_distribution' in parameters:
+            self.x_axis_distribution_cb.setChecked(parameters['x_axis_distribution'])
+
 
         # Re-enable signals
         self.n_points_spin.blockSignals(False)

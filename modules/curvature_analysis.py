@@ -21,7 +21,9 @@ class CurvatureAnalyzer:
 
     def process_stack(self, image_path, mask_path, output_dir, n_points=100,
                      depth=20, width=5, min_cell_coverage=0.8, try_rotation=False,
-                     exclude_endpoints=False, progress_callback=None):
+                     exclude_endpoints=False, angular_distribution=False,
+                     axis_based_distribution=False, x_axis_distribution=False,
+                     progress_callback=None):
         """
         Process a TIFF stack of microscope images and masks
 
@@ -34,7 +36,7 @@ class CurvatureAnalyzer:
         output_dir : str
             Directory to save results
         n_points : int
-            Number of equidistant points along the contour
+            Number of points along the contour
         depth : int
             Depth of the sampling rectangle (how far into the cell)
         width : int
@@ -45,6 +47,12 @@ class CurvatureAnalyzer:
             Whether to try rotating rejected sampling regions
         exclude_endpoints : bool
             Whether to exclude the first and last points in the analysis
+        angular_distribution : bool
+            Whether to distribute points evenly by angle
+        axis_based_distribution : bool
+            Whether to distribute points evenly along image axes
+        x_axis_distribution : bool
+            Whether to distribute points evenly along the x-axis
         progress_callback : function
             Callback function for progress updates (percentage, message)
 
@@ -63,8 +71,12 @@ class CurvatureAnalyzer:
             "width": width,
             "min_cell_coverage": min_cell_coverage,
             "try_rotation": try_rotation,
-            "exclude_endpoints": exclude_endpoints
+            "exclude_endpoints": exclude_endpoints,
+            "angular_distribution": angular_distribution,
+            "axis_based_distribution": axis_based_distribution,
+            "x_axis_distribution": x_axis_distribution
         }
+
 
         # Initialize statistics dictionary
         statistics = {
@@ -139,7 +151,9 @@ class CurvatureAnalyzer:
 
             # Analyze frame
             frame_results = self.analyze_frame(
-                image, mask, n_points, depth, width, min_cell_coverage, try_rotation, exclude_endpoints)
+                image, mask, n_points, depth, width, min_cell_coverage,
+                try_rotation, exclude_endpoints, angular_distribution,
+                axis_based_distribution, x_axis_distribution)
 
             # Store results
             results[frame_idx] = frame_results
@@ -222,7 +236,8 @@ class CurvatureAnalyzer:
         return results
 
     def analyze_frame(self, image, mask, n_points=100, depth=20, width=5, min_cell_coverage=0.8,
-                      try_rotation=False, exclude_endpoints=False):
+                     try_rotation=False, exclude_endpoints=False, angular_distribution=False,
+                     axis_based_distribution=False, x_axis_distribution=False):
         """
         Analyze a single frame
 
@@ -233,7 +248,7 @@ class CurvatureAnalyzer:
         mask : ndarray
             Binary mask
         n_points : int
-            Number of equidistant points along the contour
+            Number of points to sample
         depth : int
             Depth of the sampling rectangle (how far into the cell)
         width : int
@@ -244,6 +259,12 @@ class CurvatureAnalyzer:
             Whether to try rotating rejected sampling regions
         exclude_endpoints : bool
             Whether to exclude the first and last points in the analysis
+        angular_distribution : bool
+            Whether to distribute points evenly by angle
+        axis_based_distribution : bool
+            Whether to distribute points evenly along image axes
+        x_axis_distribution : bool
+            Whether to distribute points evenly along the x-axis
 
         Returns:
         --------
@@ -256,8 +277,26 @@ class CurvatureAnalyzer:
         if len(contour) == 0:
             return {"error": "No contour found"}
 
-        # Sample equidistant points
-        points = self.sample_equidistant_points(contour, n_points)
+        # Sample points based on selected method
+        if x_axis_distribution:
+            print(f"DEBUG: Using x-axis distribution of sample points")
+            points = self.sample_x_axis_points(contour, n_points)
+            method_name = "X-Axis"
+        elif axis_based_distribution:
+            print(f"DEBUG: Using axis-based distribution of sample points")
+            points = self.sample_axis_based_points(contour, n_points)
+            method_name = "Axis-Based"
+        elif angular_distribution:
+            print(f"DEBUG: Using angular distribution of sample points")
+            points = self.sample_angular_points(contour, n_points)
+            method_name = "Angular"
+        else:
+            print(f"DEBUG: Using standard equidistant sampling along contour")
+            points = self.sample_equidistant_points(contour, n_points)
+            method_name = "Standard"
+
+        # Generate debug visualization
+        #self.visualize_sampling(image, mask, points, method_name=method_name)
 
         # Measure curvature
         curvatures = self.measure_curvature(points)
@@ -280,7 +319,10 @@ class CurvatureAnalyzer:
             "valid_points": valid_points,
             "contour_data": contour,
             "recovered_by_rotation": recovered_by_rotation,
-            "exclude_endpoints": exclude_endpoints
+            "exclude_endpoints": exclude_endpoints,
+            "angular_distribution": angular_distribution,
+            "axis_based_distribution": axis_based_distribution,
+            "x_axis_distribution": x_axis_distribution
         }
 
         return results
@@ -432,6 +474,291 @@ class CurvatureAnalyzer:
         # If we couldn't sample enough points, just return what we have
         return np.array(sampled_points)
 
+
+    def sample_angular_points(self, contour, n_points=100):
+        """
+        Sample points around the contour at equal angular intervals.
+
+        Parameters:
+        -----------
+        contour : ndarray
+            Cell contour
+        n_points : int
+            Number of points to sample
+
+        Returns:
+        --------
+        sampled_points : ndarray
+            Array of sampled points distributed evenly by angle
+        """
+        # Find the centroid of the cell (approximate center)
+        center = np.mean(contour, axis=0)
+
+        print(f"DEBUG: Cell centroid is at {center}")
+
+        # Convert contour points to polar coordinates
+        # Calculate the angle of each point relative to center
+        polar_coords = []
+        for point in contour:
+            # Calculate vector from center to point
+            vec = point - center
+            # Calculate angle in radians
+            angle = np.arctan2(vec[1], vec[0])
+            # Calculate radius (distance from center)
+            radius = np.linalg.norm(vec)
+            polar_coords.append((angle, radius, point))
+
+        # Sort by angle
+        polar_coords.sort(key=lambda x: x[0])
+
+        # Convert angles to cumulative form (unwrapped)
+        unwrapped_coords = []
+        prev_angle = polar_coords[0][0]
+        cumulative_angle = prev_angle
+
+        for angle, radius, point in polar_coords:
+            # Handle angle wrap-around
+            delta = angle - prev_angle
+            if delta < -np.pi:
+                delta += 2*np.pi
+            elif delta > np.pi:
+                delta -= 2*np.pi
+
+            cumulative_angle += delta
+            unwrapped_coords.append((cumulative_angle, radius, point))
+            prev_angle = angle
+
+        # Get min and max of cumulative angle
+        min_angle = unwrapped_coords[0][0]
+        max_angle = unwrapped_coords[-1][0]
+
+        # Create target angles
+        target_angles = np.linspace(min_angle, max_angle, n_points)
+
+        # Find closest points to each target angle
+        sampled_points = []
+        for target in target_angles:
+            closest_idx = min(range(len(unwrapped_coords)),
+                              key=lambda i: abs(unwrapped_coords[i][0] - target))
+            sampled_points.append(unwrapped_coords[closest_idx][2])
+
+        # Check for duplicate points and adjust if necessary
+        unique_points = []
+        for i, point in enumerate(sampled_points):
+            if i > 0 and np.array_equal(point, unique_points[-1]):
+                # Find the next closest point to this target angle
+                print(f"DEBUG: Found duplicate point at index {i}, finding alternative")
+                target = target_angles[i]
+                distances = [abs(coord[0] - target) for coord in unwrapped_coords]
+                sorted_indices = np.argsort(distances)
+
+                # Try the second closest point
+                for idx in sorted_indices[1:5]:  # Try up to 5 alternative points
+                    alt_point = unwrapped_coords[idx][2]
+                    if not any(np.array_equal(alt_point, p) for p in unique_points):
+                        unique_points.append(alt_point)
+                        print(f"DEBUG: Found alternative point")
+                        break
+                else:
+                    # If we can't find a unique point, slightly perturb the current one
+                    perturbed = point + np.random.normal(0, 0.1, 2)
+                    unique_points.append(perturbed)
+                    print(f"DEBUG: Using perturbed point")
+            else:
+                unique_points.append(point)
+
+        sampled_points = np.array(unique_points)
+
+        print(f"DEBUG: Sampled {len(sampled_points)} points using angular distribution")
+
+        # Check for points that are too close to each other
+        for i in range(len(sampled_points)):
+            next_i = (i + 1) % len(sampled_points)  # Wrap around to the first point
+            p1 = sampled_points[i]
+            p2 = sampled_points[next_i]
+            dist = np.linalg.norm(p2 - p1)
+            if dist < 1e-10:  # Very small distance
+                print(f"DEBUG: Points {i} and {next_i} are very close: distance={dist}")
+
+        return np.array(sampled_points)
+
+    def sample_axis_based_points(self, contour, n_points=100):
+        """
+        Sample points around the contour with even spacing along the image axes.
+        This helps reduce bunching in extrusions by ensuring points are distributed
+        evenly in screen space rather than by contour distance or angle.
+
+        Parameters:
+        -----------
+        contour : ndarray
+            Cell contour
+        n_points : int
+            Number of points to sample
+
+        Returns:
+        --------
+        sampled_points : ndarray
+            Array of sampled points distributed evenly by axis position
+        """
+        # Get the bounding box of the contour
+        min_y, min_x = np.min(contour, axis=0)
+        max_y, max_x = np.max(contour, axis=0)
+
+        print(f"DEBUG: Contour bounding box: x=[{min_x:.1f}, {max_x:.1f}], y=[{min_y:.1f}, {max_y:.1f}]")
+
+        # We'll use a combination of x-axis and y-axis sampling
+        # First, let's determine how many points to sample from each axis
+        # We'll split them based on the aspect ratio of the bounding box
+        width = max_x - min_x
+        height = max_y - min_y
+
+        # Calculate how many points to allocate to each axis based on perimeter
+        perimeter = 2 * (width + height)
+        x_portion = 2 * width / perimeter
+        y_portion = 2 * height / perimeter
+
+        n_x_points = int(n_points * x_portion)
+        n_y_points = n_points - n_x_points
+
+        print(f"DEBUG: Sampling {n_x_points} points from x-axis edges, {n_y_points} points from y-axis edges")
+
+        # Create arrays of x and y coordinates for sampling
+        x_values = []
+        y_values = []
+
+        # Sample points from the top and bottom edges
+        if n_x_points > 0:
+            x_step = width / (n_x_points / 2)
+
+            # Top edge (constant y = min_y)
+            for i in range(n_x_points // 2):
+                x = min_x + i * x_step
+                x_values.append(x)
+                y_values.append(min_y)
+
+            # Bottom edge (constant y = max_y)
+            for i in range(n_x_points // 2):
+                x = max_x - i * x_step
+                x_values.append(x)
+                y_values.append(max_y)
+
+        # Sample points from the left and right edges
+        if n_y_points > 0:
+            y_step = height / (n_y_points / 2)
+
+            # Left edge (constant x = min_x)
+            for i in range(n_y_points // 2):
+                y = min_y + i * y_step
+                x_values.append(min_x)
+                y_values.append(y)
+
+            # Right edge (constant x = max_x)
+            for i in range(n_y_points // 2):
+                y = max_y - i * y_step
+                x_values.append(max_x)
+                y_values.append(y)
+
+        # Create grid points from these coordinates
+        grid_points = np.column_stack((y_values, x_values))
+
+        # Find the closest contour point to each grid point
+        sampled_points = []
+        for grid_point in grid_points:
+            # Calculate distances to all contour points
+            distances = np.sqrt(np.sum((contour - grid_point)**2, axis=1))
+
+            # Find the closest point
+            closest_idx = np.argmin(distances)
+            closest_point = contour[closest_idx]
+
+            # Add to sampled points, checking for duplicates
+            if not any(np.array_equal(closest_point, p) for p in sampled_points):
+                sampled_points.append(closest_point)
+
+        # If we don't have enough points (due to duplicates), add more
+        if len(sampled_points) < n_points // 2:  # If we have far too few points
+            print(f"DEBUG: Only found {len(sampled_points)} unique points, adding more")
+
+            # Sort contour points by their perimeter distance
+            distances = [0]
+            for i in range(1, len(contour)):
+                distances.append(distances[-1] + np.linalg.norm(contour[i] - contour[i-1]))
+
+            total_length = distances[-1]
+
+            # Sample additional points evenly by distance
+            additional_points_needed = n_points - len(sampled_points)
+            for i in range(additional_points_needed):
+                target_dist = (i + 1) * total_length / (additional_points_needed + 1)
+
+                # Find the closest point by distance
+                idx = np.searchsorted(distances, target_dist)
+                if idx >= len(contour):
+                    idx = len(contour) - 1
+
+                point = contour[idx]
+
+                # Add if not already included
+                if not any(np.array_equal(point, p) for p in sampled_points):
+                    sampled_points.append(point)
+
+        # Convert to numpy array
+        sampled_points = np.array(sampled_points)
+
+        print(f"DEBUG: Sampled {len(sampled_points)} points using axis-based distribution")
+
+        return sampled_points
+
+    def sample_x_axis_points(self, contour, n_points=100):
+        """
+        Sample points along the contour with even spacing along the x-axis.
+        This distributes points at regular x-intervals to prevent bunching
+        in areas with membrane extrusions.
+
+        Parameters:
+        -----------
+        contour : ndarray
+            Cell contour
+        n_points : int
+            Number of points to sample
+
+        Returns:
+        --------
+        sampled_points : ndarray
+            Array of sampled points distributed evenly along x-axis
+        """
+        # Sort contour points by x-coordinate
+        x_sorted_indices = np.argsort(contour[:, 1])
+        x_sorted_contour = contour[x_sorted_indices]
+
+        # Get min and max x values
+        min_x = x_sorted_contour[0, 1]
+        max_x = x_sorted_contour[-1, 1]
+        x_range = max_x - min_x
+
+        print(f"DEBUG: X-axis range: [{min_x:.1f}, {max_x:.1f}]")
+
+        # Calculate x-positions with even spacing
+        x_positions = np.linspace(min_x, max_x, n_points)
+
+        # For each x-position, find the closest point on the contour
+        sampled_points = []
+        for x_pos in x_positions:
+            # Find the closest point by x-coordinate
+            x_distances = np.abs(contour[:, 1] - x_pos)
+            closest_idx = np.argmin(x_distances)
+            closest_point = contour[closest_idx]
+
+            # Add point to our sampled list
+            sampled_points.append(closest_point)
+
+        # Convert to numpy array
+        sampled_points = np.array(sampled_points)
+
+        print(f"DEBUG: Sampled {len(sampled_points)} points based on x-axis positions")
+
+        return sampled_points
+
     def measure_curvature(self, points):
         """
         Measure curvature at each point along the contour.
@@ -524,7 +851,27 @@ class CurvatureAnalyzer:
 
             # Calculate tangent vector
             tangent = p_right - p_left
-            tangent = tangent / np.linalg.norm(tangent)
+            tangent_norm = np.linalg.norm(tangent)
+
+            # Check if tangent has non-zero length
+            if tangent_norm > 1e-10:  # Only normalize if length is non-zero
+                tangent = tangent / tangent_norm
+            else:
+                # If tangent is too small, try using more distant points
+                print(f"DEBUG: Tiny tangent at point {i} (norm={tangent_norm}). Trying wider tangent.")
+                left_idx2 = (i - 2) % n_points
+                right_idx2 = (i + 2) % n_points
+                p_left2 = points[left_idx2]
+                p_right2 = points[right_idx2]
+                tangent = p_right2 - p_left2
+                tangent_norm = np.linalg.norm(tangent)
+
+                if tangent_norm > 1e-10:
+                    tangent = tangent / tangent_norm
+                else:
+                    # If still too small, use a default tangent along x-axis
+                    print(f"DEBUG: Still tiny tangent at point {i}. Using default.")
+                    tangent = np.array([1.0, 0.0])
 
             # Calculate normal vectors (both possible directions)
             normal1 = np.array([-tangent[1], tangent[0]])
@@ -538,18 +885,31 @@ class CurvatureAnalyzer:
             test_point1 = np.clip(test_point1, [0, 0], [mask_shape[0]-1, mask_shape[1]-1])
             test_point2 = np.clip(test_point2, [0, 0], [mask_shape[0]-1, mask_shape[1]-1])
 
-            # Check mask values
-            val1 = mask[int(test_point1[0]), int(test_point1[1])]
-            val2 = mask[int(test_point2[0]), int(test_point2[1])]
+            # Convert to integers explicitly (avoid NaN issues)
+            try:
+                tp1_y, tp1_x = int(round(test_point1[0])), int(round(test_point1[1]))
+                tp2_y, tp2_x = int(round(test_point2[0])), int(round(test_point2[1]))
 
-            # Choose the normal that points into the cell (value 1 in mask)
-            if val1 == 1:
+                # Check mask values
+                val1 = mask[tp1_y, tp1_x]
+                val2 = mask[tp2_y, tp2_x]
+
+                # Choose the normal that points into the cell (value 1 in mask)
+                if val1 == 1:
+                    normals[i] = normal1
+                elif val2 == 1:
+                    normals[i] = normal2
+                else:
+                    # If neither point is inside the cell, use the curvature to guess
+                    normals[i] = normal2  # Default
+
+            except IndexError as e:
+                print(f"DEBUG: Index error at point {i} with test points {test_point1}, {test_point2}")
+                # Use a reasonable default normal
                 normals[i] = normal1
-            elif val2 == 1:
-                normals[i] = normal2
-            else:
-                # If neither point is inside the cell, use the curvature to guess
-                normals[i] = normal2  # Default
+            except Exception as e:
+                print(f"DEBUG: Error at point {i}: {e}")
+                normals[i] = normal1  # Default
 
         return normals
 
@@ -849,3 +1209,121 @@ class CurvatureAnalyzer:
                 "p_value": None,
                 "sample_size": int(len(combined_curvatures))
             }
+
+
+    def debug_visualize_sampling_methods(self, contour, n_points=100):
+        """
+        Create a debug visualization comparing standard and angular sampling methods
+
+        Parameters:
+        -----------
+        contour : ndarray
+            Cell contour
+        n_points : int
+            Number of points to sample
+
+        Returns:
+        --------
+        fig : matplotlib.figure.Figure
+            Debug visualization figure
+        """
+        import matplotlib.pyplot as plt
+
+        # Get both types of sampled points
+        std_points = self.sample_equidistant_points(contour, n_points)
+        ang_points = self.sample_angular_points(contour, n_points)
+
+        # Create figure
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+
+        # Plot standard sampling
+        ax1.plot(contour[:, 1], contour[:, 0], 'b-', alpha=0.5, label='Contour')
+        ax1.scatter(std_points[:, 1], std_points[:, 0], c='r', s=30, label='Sampled Points')
+        ax1.set_title('Standard Equidistant Sampling')
+        ax1.legend()
+        ax1.axis('equal')
+
+        # Plot angular sampling
+        ax2.plot(contour[:, 1], contour[:, 0], 'b-', alpha=0.5, label='Contour')
+        ax2.scatter(ang_points[:, 1], ang_points[:, 0], c='g', s=30, label='Sampled Points')
+        ax2.set_title('Angular Sampling')
+        ax2.legend()
+        ax2.axis('equal')
+
+        plt.tight_layout()
+
+        # Save comparison to file
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        plt.savefig(f"sampling_comparison_{timestamp}.png", dpi=150)
+
+        print(f"DEBUG: Saved sampling method comparison to sampling_comparison_{timestamp}.png")
+
+        return fig
+
+    def visualize_sampling(self, image, mask, points, method_name=""):
+        """
+        Create a visualization of the sampled points on the cell contour
+        """
+        import matplotlib.pyplot as plt
+
+        # Extract the contour
+        contour = self.detect_cell_edge(mask)
+
+        # Create figure
+        plt.figure(figsize=(10, 8))
+
+        # Show original image
+        plt.imshow(image, cmap='gray')
+
+        # Plot the contour
+        if len(contour) > 0:
+            plt.plot(contour[:, 1], contour[:, 0], 'b-', alpha=0.5, linewidth=1)
+
+        # Plot the sampled points
+        plt.scatter(points[:, 1], points[:, 0], c='r', s=30)
+
+        # Add point indices (every 10th point)
+        for i in range(0, len(points), 10):
+            plt.text(points[i, 1] + 3, points[i, 0] + 3, str(i), color='white', fontsize=9,
+                     bbox=dict(facecolor='black', alpha=0.7, boxstyle='round,pad=0.3'))
+
+        # If using X-axis distribution, add vertical lines to show x-positions
+        if "X-Axis" in method_name:
+            # Get the min and max y values to define line lengths
+            min_y = np.min(contour[:, 0])
+            max_y = np.max(contour[:, 0])
+            y_range = max_y - min_y
+
+            # Draw vertical lines at each x-position
+            for point in points:
+                x = point[1]  # x-coordinate
+                # Draw a vertical line from above to below the cell
+                plt.plot([x, x], [min_y - 0.1*y_range, max_y + 0.1*y_range],
+                        'g--', alpha=0.3, linewidth=0.5)
+
+        # Add title
+        plt.title(f"{method_name} Point Sampling")
+
+        # Add center point if angular method
+        if "Angular" in method_name:
+            center = np.mean(contour, axis=0)
+            plt.scatter([center[1]], [center[0]], c='cyan', s=100, marker='x')
+
+            # Add a few radial lines to show the angular divisions
+            for angle in np.linspace(0, 2*np.pi, 12, endpoint=False):
+                r = np.sqrt(image.shape[0]**2 + image.shape[1]**2) / 2  # Radius to edge of image
+                x_end = center[1] + r * np.cos(angle)
+                y_end = center[0] + r * np.sin(angle)
+                plt.plot([center[1], x_end], [center[0], y_end], 'cyan', alpha=0.3, linestyle='--')
+
+        # Remove axis ticks
+        plt.xticks([])
+        plt.yticks([])
+
+        # Save the figure
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{method_name.lower().replace(' ', '_')}_sampling_{timestamp}.png"
+        plt.savefig(filename, dpi=150)
+        plt.close()
+
+        print(f"DEBUG: Saved sampling visualization to {filename}")

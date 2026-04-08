@@ -16,50 +16,88 @@ class FileManager:
     def load_image_stack(self, file_path):
         """
         Load a microscope image stack
-        
+
         Parameters:
         -----------
         file_path : str
             Path to TIFF image stack
-            
+
         Returns:
         --------
         images : ndarray
             Array of microscope images
+
+        Raises:
+        -------
+        FileNotFoundError
+            If the file does not exist
+        ValueError
+            If the file is empty, corrupt, or not a valid TIFF
         """
-        # Load images
-        images = tifffile.imread(file_path)
-        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Image file not found: {file_path}")
+
+        if os.path.getsize(file_path) == 0:
+            raise ValueError(f"Image file is empty: {file_path}")
+
+        try:
+            images = tifffile.imread(file_path)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to read TIFF file '{file_path}': {e}") from e
+
+        if images is None or images.size == 0:
+            raise ValueError(f"TIFF file contains no data: {file_path}")
+
         # Handle single image case
         if images.ndim == 2:
             images = images[np.newaxis, ...]
-        
+
         return images
     
     def load_mask_stack(self, file_path):
         """
         Load a binary mask stack
-        
+
         Parameters:
         -----------
         file_path : str
             Path to TIFF mask stack
-            
+
         Returns:
         --------
         masks : ndarray
             Array of binary masks
+
+        Raises:
+        -------
+        FileNotFoundError
+            If the file does not exist
+        ValueError
+            If the file is empty, corrupt, or not a valid TIFF
         """
-        # Load masks
-        masks = tifffile.imread(file_path)
-        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Mask file not found: {file_path}")
+
+        if os.path.getsize(file_path) == 0:
+            raise ValueError(f"Mask file is empty: {file_path}")
+
+        try:
+            masks = tifffile.imread(file_path)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to read TIFF mask file '{file_path}': {e}") from e
+
+        if masks is None or masks.size == 0:
+            raise ValueError(f"Mask file contains no data: {file_path}")
+
         # Ensure masks are binary (0 = background, 1 = cell)
         masks = (masks > 0).astype(np.uint8)
-        
+
         # Handle single image case
         if masks.ndim == 2:
             masks = masks[np.newaxis, ...]
-        
+
         return masks
     
     def save_image(self, image, file_path):

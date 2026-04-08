@@ -1,6 +1,7 @@
 import sys
 import os
 import numpy as np
+from scipy import stats
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -50,6 +51,7 @@ class AnalysisWorker(QThread):
         self.params = params
         print(f"DEBUG: AnalysisWorker initialized with try_rotation={params.get('try_rotation', False)}")
 
+
     def run(self):
         try:
             results = self.analyzer.process_stack(
@@ -61,7 +63,10 @@ class AnalysisWorker(QThread):
                 self.params['width'],
                 self.params['min_cell_coverage'],
                 self.params.get('try_rotation', False),
-                self.params.get('exclude_endpoints', False),  # Add this parameter
+                self.params.get('exclude_endpoints', False),
+                self.params.get('angular_distribution', False),
+                self.params.get('axis_based_distribution', False),
+                self.params.get('x_axis_distribution', False),
                 self.progress_callback
             )
             self.complete_signal.emit(results)
@@ -70,7 +75,6 @@ class AnalysisWorker(QThread):
 
     def progress_callback(self, percentage, message):
         self.progress_signal.emit(percentage, message)
-
 
 class MainWindow(QMainWindow):
     """Main application window for CellCurvatureAnalyzer"""
@@ -348,6 +352,14 @@ class MainWindow(QMainWindow):
         overlay_control_layout.addWidget(self.show_intensity_cb, 1, 1)
         overlay_control_layout.addWidget(self.show_sampling_cb, 2, 0)
 
+        # Add movement overlay checkbox
+        self.show_movement_cb = QCheckBox("Show Movement")
+        self.show_movement_cb.setChecked(False)
+        self.show_movement_cb.toggled.connect(self.update_overlay_display)
+
+        overlay_control_layout.addWidget(self.show_movement_cb, 2, 1)
+
+
         # Add overlay brightness controls
         overlay_brightness_layout = QGridLayout()
 
@@ -522,12 +534,34 @@ class MainWindow(QMainWindow):
         control_layout = QHBoxLayout()
         control_panel.setLayout(control_layout)
 
+        # Add metric type selector (NEW)
+        self.metric_type_combo = QComboBox()
+        self.metric_type_combo.addItems(["Curvature", "Movement"])
+        self.metric_type_combo.currentIndexChanged.connect(self.on_metric_type_changed)
+
+        self.metric_type_label = QLabel("Metric Type:")
+        control_layout.addWidget(self.metric_type_label)
+        control_layout.addWidget(self.metric_type_combo)
+
+        # Existing curvature type combo
         self.correlation_type_combo = QComboBox()
         self.correlation_type_combo.addItems(["Sign Curvature", "Magnitude Curvature", "Normalized Curvature"])
         self.correlation_type_combo.currentIndexChanged.connect(self.update_correlation_display)
 
-        control_layout.addWidget(QLabel("Curvature Type:"))
+        self.curvature_type_label = QLabel("Curvature Type:")
+        control_layout.addWidget(self.curvature_type_label)
         control_layout.addWidget(self.correlation_type_combo)
+
+        # NEW: Add movement type combo
+        self.movement_type_combo = QComboBox()
+        self.movement_type_combo.addItems(["Movement Score", "Extension/Retraction"])
+        self.movement_type_combo.currentIndexChanged.connect(self.update_correlation_display)
+        self.movement_type_combo.setVisible(False)  # Initially hidden
+
+        self.movement_type_label = QLabel("Movement Type:")
+        self.movement_type_label.setVisible(False)  # Initially hidden
+        control_layout.addWidget(self.movement_type_label)
+        control_layout.addWidget(self.movement_type_combo)
 
         self.correlation_mode_combo = QComboBox()
         self.correlation_mode_combo.addItems(["Current Frame", "All Frames", "By Movement Type"])
@@ -543,6 +577,12 @@ class MainWindow(QMainWindow):
 
         control_layout.addWidget(QLabel("Comparison Metric:"))
         control_layout.addWidget(self.comparison_metric_combo)
+
+        # Add a button to generate movement data for all frames
+        self.generate_movement_btn = QPushButton("Generate Movement Data")
+        self.generate_movement_btn.clicked.connect(self.generate_all_frames_movement_data)
+        self.generate_movement_btn.setVisible(False)  # Initially hidden
+        control_layout.addWidget(self.generate_movement_btn)
 
         layout.addWidget(control_panel)
 
@@ -949,6 +989,43 @@ class MainWindow(QMainWindow):
 
         # Log frame change
         self.log_console.log(f"Movement frame changed to {frame_index}")
+
+    def generate_all_frames_movement_data(self):
+        """Generate movement data for all frames"""
+        results = self.loaded_data.get('results')
+        if results is None:
+            return
+
+        # Process each frame
+        for frame_idx in list(results.keys()):  # Create a copy of keys
+            if not isinstance(frame_idx, int):
+                continue
+
+            self.generate_frame_movement_data(frame_idx)
+
+        # Log completion
+        self.log_console.log(f"Generated movement data for all frames")
+
+    def on_metric_type_changed(self):
+        """Handle changes to the metric type selector"""
+        metric_type = self.metric_type_combo.currentText()
+
+        # Show/hide appropriate controls
+        if metric_type == "Curvature":
+            self.correlation_type_combo.setVisible(True)
+            self.curvature_type_label.setVisible(True)
+            self.movement_type_combo.setVisible(False)
+            self.movement_type_label.setVisible(False)
+            self.generate_movement_btn.setVisible(False)
+        else:  # Movement
+            self.correlation_type_combo.setVisible(False)
+            self.curvature_type_label.setVisible(False)
+            self.movement_type_combo.setVisible(True)
+            self.movement_type_label.setVisible(True)
+            self.generate_movement_btn.setVisible(True)
+
+        # Update the display
+        self.update_correlation_display()
 
     def create_settings_tab(self):
         """Create the settings tab"""
@@ -1504,6 +1581,7 @@ class MainWindow(QMainWindow):
 
         self.movement_type_label.setText(movement_type)
 
+
     def update_correlation_display(self):
         """Update the correlation analysis tab display"""
         results = self.loaded_data.get('results')
@@ -1512,7 +1590,13 @@ class MainWindow(QMainWindow):
             return
 
         # Get current selections
-        curvature_type = self.correlation_type_combo.currentText()
+        metric_type = self.metric_type_combo.currentText()
+
+        if metric_type == "Curvature":
+            subtype = self.correlation_type_combo.currentText()
+        else:  # Movement
+            subtype = self.movement_type_combo.currentText()
+
         analysis_mode = self.correlation_mode_combo.currentText()
 
         # Get temporal mode from parameter panel
@@ -1531,22 +1615,36 @@ class MainWindow(QMainWindow):
             if frame in results:
                 frame_results = results[frame]
 
+                # For movement analysis, generate data if needed
+                if metric_type == "Movement" and 'movement_data' not in frame_results:
+                    self.generate_frame_movement_data(frame)
+
                 if temporal_mode == "Current Frame":
                     # Standard single-frame correlation
-                    self.analyze_current_frame_correlation(frame_results, curvature_type, ax)
+                    self.analyze_current_frame_correlation(frame_results, metric_type, subtype, ax)
 
                 elif temporal_mode == "Current-Previous Frames" and frame > 0:
                     previous_frame = frame - 1
                     if previous_frame in results:
                         previous_results = results[previous_frame]
+
+                        # For movement analysis, generate data for previous frame if needed
+                        if metric_type == "Movement" and 'movement_data' not in previous_results:
+                            self.generate_frame_movement_data(previous_frame)
+
                         self.analyze_temporal_frame_correlation(frame_results, previous_results,
-                                                              curvature_type, "Previous Frame", ax)
+                                                              metric_type, subtype, "Previous Frame", ax)
 
                 elif temporal_mode == "Current-Random Frames" and reference_frame != frame:
                     if reference_frame in results:
                         reference_results = results[reference_frame]
+
+                        # For movement analysis, generate data for reference frame if needed
+                        if metric_type == "Movement" and 'movement_data' not in reference_results:
+                            self.generate_frame_movement_data(reference_frame)
+
                         self.analyze_temporal_frame_correlation(frame_results, reference_results,
-                                                              curvature_type, f"Frame {reference_frame+1}", ax)
+                                                              metric_type, subtype, f"Frame {reference_frame+1}", ax)
 
                 # Refresh canvas
                 self.correlation_plot_canvas.draw()
@@ -1556,38 +1654,109 @@ class MainWindow(QMainWindow):
                 self.comparison_canvas.draw()
 
         elif analysis_mode == "All Frames":
+            # For movement analysis, generate data for all frames if needed
+            if metric_type == "Movement":
+                self.generate_all_frames_movement_data()
+
             # Apply temporal mode to "All Frames" analysis
             if temporal_mode == "Current Frame":
                 # Standard all-frames analysis (within each frame)
-                self.analyze_all_frames_standard_correlation(results, curvature_type)
+                self.analyze_all_frames_standard_correlation(results, metric_type, subtype)
 
             elif temporal_mode == "Current-Previous Frames":
                 # Analyze correlation between current frame curvature and previous frame intensity for all frames
-                self.analyze_all_frames_temporal_correlation(results, curvature_type, "previous")
+                self.analyze_all_frames_temporal_correlation(results, metric_type, subtype, "previous")
 
             elif temporal_mode == "Current-Random Frames":
                 # Analyze correlation between current frame curvature and random frame intensity
-                self.analyze_all_frames_temporal_correlation(results, curvature_type, "random", reference_frame)
+                self.analyze_all_frames_temporal_correlation(results, metric_type, subtype, "random", reference_frame)
 
         elif analysis_mode == "By Movement Type":
+            # For movement analysis, generate data for all frames if needed
+            if metric_type == "Movement":
+                self.generate_all_frames_movement_data()
+
             # Apply temporal mode to "By Movement Type" analysis
             if temporal_mode == "Current Frame":
                 # Standard movement-type analysis (within each frame)
-                self.analyze_movement_standard_correlation(results, curvature_type)
+                self.analyze_movement_standard_correlation(results, metric_type, subtype)
 
             elif temporal_mode == "Current-Previous Frames":
                 # Analyze correlation between current frame curvature and previous frame intensity by movement type
-                self.analyze_movement_temporal_correlation(results, curvature_type, "previous")
+                self.analyze_movement_temporal_correlation(results, metric_type, subtype, "previous")
 
             elif temporal_mode == "Current-Random Frames":
                 # Analyze correlation between current frame curvature and random frame intensity by movement type
-                self.analyze_movement_temporal_correlation(results, curvature_type, "random", reference_frame)
+                self.analyze_movement_temporal_correlation(results, metric_type, subtype, "random", reference_frame)
 
 
-    def analyze_all_frames_standard_correlation(self, results, curvature_type):
+    def generate_frame_movement_data(self, frame_idx):
+        """
+        Generate movement data for a single frame
+
+        Parameters:
+        -----------
+        frame_idx : int
+            Frame index
+        """
+        results = self.loaded_data.get('results')
+        if results is None or frame_idx not in results:
+            return
+
+        frame_results = results[frame_idx]
+
+        # Skip if we already have movement data
+        if 'movement_data' in frame_results:
+            return
+
+        # We need points and contour data
+        if 'points' not in frame_results or 'contour_data' not in frame_results:
+            return
+
+        points = frame_results['points']
+        contour = frame_results['contour_data']
+
+        # Initialize movement data with default values
+        movement_scores = np.zeros(len(points))
+        movement_types = np.array(['stable'] * len(points), dtype=object)
+
+        # For each point, calculate local curvature change as a proxy for movement
+        try:
+            if 'curvatures' in frame_results:
+                sign_curvature, magnitude_curvature, normalized_curvature = frame_results['curvatures']
+
+                # Calculate the gradient of curvature along the contour
+                for i in range(len(points)):
+                    # Get neighboring points (with wrapping)
+                    prev_idx = (i - 1) % len(points)
+                    next_idx = (i + 1) % len(points)
+
+                    # Calculate curvature gradient (central difference)
+                    curvature_gradient = (normalized_curvature[next_idx] - normalized_curvature[prev_idx]) / 2
+                    movement_scores[i] = curvature_gradient
+
+                    # Classify as extending, retracting, or stable
+                    if curvature_gradient > 0.1:
+                        movement_types[i] = 'extending'
+                    elif curvature_gradient < -0.1:
+                        movement_types[i] = 'retracting'
+                    else:
+                        movement_types[i] = 'stable'
+        except Exception as e:
+            # Log error but continue
+            print(f"Error generating movement data for frame {frame_idx}: {str(e)}")
+            return
+
+        # Store movement data in frame results
+        frame_results['movement_data'] = {
+            'scores': movement_scores,
+            'types': movement_types
+        }
+
+    def analyze_all_frames_standard_correlation(self, results, metric_type, subtype):
         """Standard correlation analysis combining data from all frames (within each frame)"""
         # Combine data from all frames
-        combined_curvatures = []
+        combined_metric_data = []
         combined_intensities = []
 
         for frame_idx, frame_results in results.items():
@@ -1595,53 +1764,85 @@ class MainWindow(QMainWindow):
                 continue
 
             # Check if required data is available
-            if ('curvatures' not in frame_results or
-                'intensities' not in frame_results or
+            if ('intensities' not in frame_results or
                 'valid_points' not in frame_results):
                 continue
 
-            # Get data
-            if curvature_type == "Sign Curvature":
-                curvatures = frame_results['curvatures'][0]  # Sign curvature
-            elif curvature_type == "Magnitude Curvature":
-                curvatures = frame_results['curvatures'][1]  # Magnitude curvature
-            elif curvature_type == "Normalized Curvature":
-                curvatures = frame_results['curvatures'][2]  # Normalized curvature
+            # Get data based on metric type and subtype
+            if metric_type == "Curvature":
+                if 'curvatures' not in frame_results:
+                    continue
+
+                # Map subtype to curvature index
+                if subtype == "Sign Curvature":
+                    metric_data = frame_results['curvatures'][0]  # Sign curvature
+                elif subtype == "Magnitude Curvature":
+                    metric_data = frame_results['curvatures'][1]  # Magnitude curvature
+                elif subtype == "Normalized Curvature":
+                    metric_data = frame_results['curvatures'][2]  # Normalized curvature
+                else:
+                    continue
+
+                metric_name = subtype
+
+            elif metric_type == "Movement":
+                if 'movement_data' not in frame_results:
+                    # Try to generate movement data
+                    self.generate_frame_movement_data(frame_idx)
+
+                    if 'movement_data' not in frame_results:
+                        continue
+
+                if subtype == "Movement Score":
+                    metric_data = frame_results['movement_data']['scores']
+                    metric_name = "Movement Score"
+                elif subtype == "Extension/Retraction":
+                    # Convert categorical to numerical
+                    movement_types = frame_results['movement_data']['types']
+                    metric_data = np.zeros(len(movement_types))
+                    for i, mtype in enumerate(movement_types):
+                        if mtype == 'extending':
+                            metric_data[i] = 1
+                        elif mtype == 'retracting':
+                            metric_data[i] = -1
+                    metric_name = "Extension/Retraction"
+                else:
+                    continue
             else:
                 continue
 
             intensities = frame_results['intensities']
             valid_points = frame_results['valid_points']
 
-            # Filter data
-            valid_curvatures = curvatures[valid_points]
+            # Filter valid points
+            valid_metric = metric_data[valid_points]
             valid_intensities = intensities[valid_points]
 
             # Add to combined data
-            combined_curvatures.extend(valid_curvatures)
+            combined_metric_data.extend(valid_metric)
             combined_intensities.extend(valid_intensities)
 
         # Convert to numpy arrays
-        combined_curvatures = np.array(combined_curvatures)
+        combined_metric_data = np.array(combined_metric_data)
         combined_intensities = np.array(combined_intensities)
 
-        # Clear plot
+        # Clear figure
         self.correlation_plot_figure.clear()
         ax = self.correlation_plot_figure.add_subplot(111)
 
         # Create scatter plot
-        ax.scatter(combined_curvatures, combined_intensities, alpha=0.5)
+        ax.scatter(combined_metric_data, combined_intensities, alpha=0.5)
 
         # Add regression line if enough points
-        if len(combined_curvatures) > 1:
+        if len(combined_metric_data) > 1:
             # Calculate regression
-            slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(
-                combined_curvatures, combined_intensities)
+            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                combined_metric_data, combined_intensities)
 
             # Create line data
             x_line = np.linspace(
-                min(combined_curvatures),
-                max(combined_curvatures),
+                min(combined_metric_data),
+                max(combined_metric_data),
                 100
             )
             y_line = slope * x_line + intercept
@@ -1651,34 +1852,36 @@ class MainWindow(QMainWindow):
                     label=f'R² = {r_value**2:.3f}, p = {p_value:.3f}')
 
             # Add stats to title
-            title = f"{curvature_type}-Intensity Correlation (All Frames)"
-            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(combined_curvatures)}"
+            title = f"{metric_name}-Intensity Correlation (All Frames)"
+            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(combined_metric_data)}"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             self.add_table_row(self.correlation_stats_table, "Frames", "All")
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_metric_data))
             self.add_table_row(self.correlation_stats_table, "R²", r_value**2)
             self.add_table_row(self.correlation_stats_table, "p-value", p_value)
             self.add_table_row(self.correlation_stats_table, "Slope", slope)
             self.add_table_row(self.correlation_stats_table, "Intercept", intercept)
             self.add_table_row(self.correlation_stats_table, "Standard Error", std_err)
         else:
-            title = f"{curvature_type}-Intensity Correlation (All Frames)\nInsufficient data for regression"
+            title = f"{metric_name}-Intensity Correlation (All Frames)\nInsufficient data for regression"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             self.add_table_row(self.correlation_stats_table, "Frames", "All")
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_metric_data))
             self.add_table_row(self.correlation_stats_table, "Status", "Insufficient data")
 
         # Set labels and title
-        ax.set_xlabel(curvature_type)
+        ax.set_xlabel(metric_name)
         ax.set_ylabel('Intensity')
         ax.set_title(title)
-        if len(combined_curvatures) > 1:
+        if len(combined_metric_data) > 1:
             ax.legend(loc='best')
 
         # Refresh canvas
@@ -1690,7 +1893,7 @@ class MainWindow(QMainWindow):
 
 
 
-    def analyze_movement_standard_correlation(self, results, curvature_type):
+    def analyze_movement_standard_correlation(self, results, metric_type, subtype):
         """Standard correlation analysis by movement type (within each frame)"""
         if 'movement_types' not in results:
             return
@@ -1714,88 +1917,81 @@ class MainWindow(QMainWindow):
 
         # Collect data by movement type
         movement_data = {
-            'extending': {'curvatures': [], 'intensities': []},
-            'retracting': {'curvatures': [], 'intensities': []},
-            'stable': {'curvatures': [], 'intensities': []}
+            'extending': {'metric_data': [], 'intensities': []},
+            'retracting': {'metric_data': [], 'intensities': []},
+            'stable': {'metric_data': [], 'intensities': []}
         }
 
-        # Process extending frames
-        for frame in extending_frames:
-            if frame in results:
-                frame_results = results[frame]
-                if ('curvatures' in frame_results and
-                    'intensities' in frame_results and
-                    'valid_points' in frame_results):
+        # Process each movement type
+        for movement_type_name, frames in [
+            ('extending', extending_frames),
+            ('retracting', retracting_frames),
+            ('stable', stable_frames)
+        ]:
+            for frame in frames:
+                if frame not in results:
+                    continue
 
-                    if curvature_type == "Sign Curvature":
-                        curvatures = frame_results['curvatures'][0]  # Sign curvature
-                    elif curvature_type == "Magnitude Curvature":
-                        curvatures = frame_results['curvatures'][1]  # Magnitude curvature
-                    elif curvature_type == "Normalized Curvature":
-                        curvatures = frame_results['curvatures'][2]  # Normalized curvature
+                frame_results = results[frame]
+
+                # Check for required data
+                if ('intensities' not in frame_results or
+                    'valid_points' not in frame_results):
+                    continue
+
+                # Get data based on metric type and subtype
+                if metric_type == "Curvature":
+                    if 'curvatures' not in frame_results:
+                        continue
+
+                    # Map subtype to curvature index
+                    if subtype == "Sign Curvature":
+                        metric_data = frame_results['curvatures'][0]  # Sign curvature
+                    elif subtype == "Magnitude Curvature":
+                        metric_data = frame_results['curvatures'][1]  # Magnitude curvature
+                    elif subtype == "Normalized Curvature":
+                        metric_data = frame_results['curvatures'][2]  # Normalized curvature
                     else:
                         continue
 
-                    intensities = frame_results['intensities']
-                    valid_points = frame_results['valid_points']
+                    metric_name = subtype
 
-                    valid_curvatures = curvatures[valid_points]
-                    valid_intensities = intensities[valid_points]
+                elif metric_type == "Movement":
+                    if 'movement_data' not in frame_results:
+                        # Try to generate movement data
+                        self.generate_frame_movement_data(frame)
 
-                    movement_data['extending']['curvatures'].extend(valid_curvatures)
-                    movement_data['extending']['intensities'].extend(valid_intensities)
+                        if 'movement_data' not in frame_results:
+                            continue
 
-        # Process retracting frames
-        for frame in retracting_frames:
-            if frame in results:
-                frame_results = results[frame]
-                if ('curvatures' in frame_results and
-                    'intensities' in frame_results and
-                    'valid_points' in frame_results):
-
-                    if curvature_type == "Sign Curvature":
-                        curvatures = frame_results['curvatures'][0]
-                    elif curvature_type == "Magnitude Curvature":
-                        curvatures = frame_results['curvatures'][1]
-                    elif curvature_type == "Normalized Curvature":
-                        curvatures = frame_results['curvatures'][2]
+                    if subtype == "Movement Score":
+                        metric_data = frame_results['movement_data']['scores']
+                        metric_name = "Movement Score"
+                    elif subtype == "Extension/Retraction":
+                        # Convert categorical to numerical
+                        frame_movement_types = frame_results['movement_data']['types']
+                        metric_data = np.zeros(len(frame_movement_types))
+                        for i, mtype in enumerate(frame_movement_types):
+                            if mtype == 'extending':
+                                metric_data[i] = 1
+                            elif mtype == 'retracting':
+                                metric_data[i] = -1
+                        metric_name = "Extension/Retraction"
                     else:
                         continue
+                else:
+                    continue
 
-                    intensities = frame_results['intensities']
-                    valid_points = frame_results['valid_points']
+                intensities = frame_results['intensities']
+                valid_points = frame_results['valid_points']
 
-                    valid_curvatures = curvatures[valid_points]
-                    valid_intensities = intensities[valid_points]
+                # Filter for valid points
+                valid_metric = metric_data[valid_points]
+                valid_intensities = intensities[valid_points]
 
-                    movement_data['retracting']['curvatures'].extend(valid_curvatures)
-                    movement_data['retracting']['intensities'].extend(valid_intensities)
-
-        # Process stable frames
-        for frame in stable_frames:
-            if frame in results:
-                frame_results = results[frame]
-                if ('curvatures' in frame_results and
-                    'intensities' in frame_results and
-                    'valid_points' in frame_results):
-
-                    if curvature_type == "Sign Curvature":
-                        curvatures = frame_results['curvatures'][0]
-                    elif curvature_type == "Magnitude Curvature":
-                        curvatures = frame_results['curvatures'][1]
-                    elif curvature_type == "Normalized Curvature":
-                        curvatures = frame_results['curvatures'][2]
-                    else:
-                        continue
-
-                    intensities = frame_results['intensities']
-                    valid_points = frame_results['valid_points']
-
-                    valid_curvatures = curvatures[valid_points]
-                    valid_intensities = intensities[valid_points]
-
-                    movement_data['stable']['curvatures'].extend(valid_curvatures)
-                    movement_data['stable']['intensities'].extend(valid_intensities)
+                # Add to movement data
+                movement_data[movement_type_name]['metric_data'].extend(valid_metric)
+                movement_data[movement_type_name]['intensities'].extend(valid_intensities)
 
         # Create scatter plot with all movement types
         self.correlation_plot_figure.clear()
@@ -1810,30 +2006,30 @@ class MainWindow(QMainWindow):
 
         # Plot each movement type
         for movement, color in colors.items():
-            move_curvatures = np.array(movement_data[movement]['curvatures'])
-            move_intensities = np.array(movement_data[movement]['intensities'])
+            metric_values = np.array(movement_data[movement]['metric_data'])
+            intensity_values = np.array(movement_data[movement]['intensities'])
 
-            if len(move_curvatures) > 0:
-                ax.scatter(move_curvatures, move_intensities,
+            if len(metric_values) > 0:
+                ax.scatter(metric_values, intensity_values,
                           color=color, alpha=0.5, label=movement.capitalize())
 
         # Add regression lines for each type
         regression_stats = {}
 
         for movement, color in colors.items():
-            move_curvatures = np.array(movement_data[movement]['curvatures'])
-            move_intensities = np.array(movement_data[movement]['intensities'])
+            metric_values = np.array(movement_data[movement]['metric_data'])
+            intensity_values = np.array(movement_data[movement]['intensities'])
 
-            if len(move_curvatures) > 1:
+            if len(metric_values) > 1:
                 # Calculate regression
-                slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(
-                    move_curvatures, move_intensities)
+                slope, intercept, r_value, p_value, std_err = stats.linregress(
+                    metric_values, intensity_values)
 
                 # Create line data
                 try:
                     x_line = np.linspace(
-                        min(move_curvatures),
-                        max(move_curvatures),
+                        min(metric_values),
+                        max(metric_values),
                         100
                     )
                     y_line = slope * x_line + intercept
@@ -1842,7 +2038,7 @@ class MainWindow(QMainWindow):
                     ax.plot(x_line, y_line, color=color, linestyle='-',
                             label=f'{movement.capitalize()}: R²={r_value**2:.3f}')
                 except:
-                    # Handle case where curvatures have no range
+                    # Handle case where metric values have no range
                     pass
 
                 # Store stats
@@ -1851,13 +2047,13 @@ class MainWindow(QMainWindow):
                     'p_value': p_value,
                     'slope': slope,
                     'intercept': intercept,
-                    'sample_size': len(move_curvatures)
+                    'sample_size': len(metric_values)
                 }
 
         # Set labels and title
-        ax.set_xlabel(curvature_type)
+        ax.set_xlabel(metric_name)
         ax.set_ylabel('Intensity')
-        ax.set_title(f"{curvature_type}-Intensity Correlation by Movement Type")
+        ax.set_title(f"{metric_name}-Intensity Correlation by Movement Type")
         ax.legend(loc='best')
 
         # Refresh canvas
@@ -1865,7 +2061,8 @@ class MainWindow(QMainWindow):
 
         # Update stats table
         self.correlation_stats_table.setRowCount(0)
-        self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+        self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+        self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
 
         for movement in ['extending', 'retracting', 'stable']:
             if movement in regression_stats:
@@ -1879,50 +2076,9 @@ class MainWindow(QMainWindow):
         self.current_regression_stats = regression_stats
 
         # Create comparison bar chart
-        self.comparison_figure.clear()
-        ax = self.comparison_figure.add_subplot(111)
-
-        # Get R² values
-        r2_values = []
-        labels = []
-        colors_list = []
-
-        for movement in ['extending', 'retracting', 'stable']:
-            if movement in regression_stats:
-                r2_values.append(regression_stats[movement]['r_squared'])
-                labels.append(movement.capitalize())
-                colors_list.append(colors[movement])
-
-        # Create bar chart
-        bars = ax.bar(labels, r2_values, color=colors_list, alpha=0.7)
-
-        # Add p-value annotations
-        for i, movement in enumerate(['extending', 'retracting', 'stable']):
-            if movement in regression_stats and i < len(r2_values):
-                p_value = regression_stats[movement]['p_value']
-                annotation = f"p={p_value:.3f}"
-                if p_value < 0.001:
-                    annotation = "p<0.001"
-                elif p_value < 0.01:
-                    annotation = "p<0.01"
-                elif p_value < 0.05:
-                    annotation = "p<0.05"
-
-                ax.annotate(annotation, (i, r2_values[i] + 0.02),
-                          ha='center', va='bottom', fontsize=9, rotation=90)
-
-        # Set labels and title
-        ax.set_xlabel('Movement Type')
-        ax.set_ylabel('R² (Coefficient of Determination)')
-        ax.set_title(f'Comparison of {curvature_type}-Intensity Correlation by Movement Type')
-
-        # Refresh canvas
-        self.comparison_canvas.draw()
-
-        # Update comparison chart with selected metric
         self.update_comparison_chart()
 
-    def analyze_all_frames_temporal_correlation(self, results, curvature_type, mode, reference_frame=None):
+    def analyze_all_frames_temporal_correlation(self, results, metric_type, subtype, mode, reference_frame=None):
         """
         Temporal correlation analysis combining data from all frames
 
@@ -1930,15 +2086,17 @@ class MainWindow(QMainWindow):
         -----------
         results : dict
             Analysis results
-        curvature_type : str
-            Type of curvature to analyze
+        metric_type : str
+            Type of metric to analyze ("Curvature" or "Movement")
+        subtype : str
+            Subtype of the metric (e.g., "Normalized Curvature" or "Movement Score")
         mode : str
             "previous" or "random"
         reference_frame : int, optional
             Reference frame for random mode
         """
         # Combine data from all frames
-        combined_curvatures = []
+        combined_metric_data = []
         combined_intensities = []
 
         # Find valid frames (with results)
@@ -1956,19 +2114,53 @@ class MainWindow(QMainWindow):
                 # Skip first frame for previous mode
                 continue
 
-            # Get curvature data from current frame
+            # Get current frame data
             frame_results = results[frame_idx]
-            if ('curvatures' not in frame_results or
-                'valid_points' not in frame_results):
+
+            # Check for required data
+            if ('valid_points' not in frame_results):
                 continue
 
-            # Get curvature data
-            if curvature_type == "Sign Curvature":
-                curvatures = frame_results['curvatures'][0]  # Sign curvature
-            elif curvature_type == "Magnitude Curvature":
-                curvatures = frame_results['curvatures'][1]  # Magnitude curvature
-            elif curvature_type == "Normalized Curvature":
-                curvatures = frame_results['curvatures'][2]  # Normalized curvature
+            # Get data based on metric type and subtype
+            if metric_type == "Curvature":
+                if 'curvatures' not in frame_results:
+                    continue
+
+                # Map subtype to curvature index
+                if subtype == "Sign Curvature":
+                    metric_data = frame_results['curvatures'][0]  # Sign curvature
+                elif subtype == "Magnitude Curvature":
+                    metric_data = frame_results['curvatures'][1]  # Magnitude curvature
+                elif subtype == "Normalized Curvature":
+                    metric_data = frame_results['curvatures'][2]  # Normalized curvature
+                else:
+                    continue
+
+                metric_name = subtype
+
+            elif metric_type == "Movement":
+                if 'movement_data' not in frame_results:
+                    # Try to generate movement data
+                    self.generate_frame_movement_data(frame_idx)
+
+                    if 'movement_data' not in frame_results:
+                        continue
+
+                if subtype == "Movement Score":
+                    metric_data = frame_results['movement_data']['scores']
+                    metric_name = "Movement Score"
+                elif subtype == "Extension/Retraction":
+                    # Convert categorical to numerical
+                    movement_types = frame_results['movement_data']['types']
+                    metric_data = np.zeros(len(movement_types))
+                    for i, mtype in enumerate(movement_types):
+                        if mtype == 'extending':
+                            metric_data[i] = 1
+                        elif mtype == 'retracting':
+                            metric_data[i] = -1
+                    metric_name = "Extension/Retraction"
+                else:
+                    continue
             else:
                 continue
 
@@ -2009,15 +2201,15 @@ class MainWindow(QMainWindow):
                 continue
 
             # Filter data for valid points
-            valid_curvatures = curvatures[valid_points]
+            valid_metric_data = metric_data[valid_points]
             valid_intensities = ref_intensities[valid_points]
 
             # Add to combined data
-            combined_curvatures.extend(valid_curvatures)
+            combined_metric_data.extend(valid_metric_data)
             combined_intensities.extend(valid_intensities)
 
         # Convert to numpy arrays
-        combined_curvatures = np.array(combined_curvatures)
+        combined_metric_data = np.array(combined_metric_data)
         combined_intensities = np.array(combined_intensities)
 
         # Clear plot
@@ -2025,18 +2217,18 @@ class MainWindow(QMainWindow):
         ax = self.correlation_plot_figure.add_subplot(111)
 
         # Create scatter plot
-        ax.scatter(combined_curvatures, combined_intensities, alpha=0.5)
+        ax.scatter(combined_metric_data, combined_intensities, alpha=0.5)
 
         # Add regression line if enough points
-        if len(combined_curvatures) > 1:
+        if len(combined_metric_data) > 1:
             # Calculate regression
-            slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(
-                combined_curvatures, combined_intensities)
+            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                combined_metric_data, combined_intensities)
 
             # Create line data
             x_line = np.linspace(
-                min(combined_curvatures),
-                max(combined_curvatures),
+                min(combined_metric_data),
+                max(combined_metric_data),
                 100
             )
             y_line = slope * x_line + intercept
@@ -2047,22 +2239,23 @@ class MainWindow(QMainWindow):
 
             # Create title based on mode
             if mode == "previous":
-                title = f"Current Frame {curvature_type} vs Previous Frame Intensity (All Frames)"
+                title = f"Current Frame {metric_name} vs Previous Frame Intensity (All Frames)"
             else:
                 if reference_frame is not None:
-                    title = f"Current Frame {curvature_type} vs Frame {reference_frame+1} Intensity (All Frames)"
+                    title = f"Current Frame {metric_name} vs Frame {reference_frame+1} Intensity (All Frames)"
                 else:
-                    title = f"Current Frame {curvature_type} vs Random Frame Intensity (All Frames)"
+                    title = f"Current Frame {metric_name} vs Random Frame Intensity (All Frames)"
 
-            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(combined_curvatures)}"
+            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(combined_metric_data)}"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
             self.add_table_row(self.correlation_stats_table, "Analysis Type", f"Temporal ({mode})")
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             if mode == "random" and reference_frame is not None:
                 self.add_table_row(self.correlation_stats_table, "Reference Frame", reference_frame+1)
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_metric_data))
             self.add_table_row(self.correlation_stats_table, "R²", r_value**2)
             self.add_table_row(self.correlation_stats_table, "p-value", p_value)
             self.add_table_row(self.correlation_stats_table, "Slope", slope)
@@ -2071,26 +2264,27 @@ class MainWindow(QMainWindow):
         else:
             # Create title based on mode
             if mode == "previous":
-                title = f"Current Frame {curvature_type} vs Previous Frame Intensity (All Frames)"
+                title = f"Current Frame {metric_name} vs Previous Frame Intensity (All Frames)"
             else:
                 if reference_frame is not None:
-                    title = f"Current Frame {curvature_type} vs Frame {reference_frame+1} Intensity (All Frames)"
+                    title = f"Current Frame {metric_name} vs Frame {reference_frame+1} Intensity (All Frames)"
                 else:
-                    title = f"Current Frame {curvature_type} vs Random Frame Intensity (All Frames)"
+                    title = f"Current Frame {metric_name} vs Random Frame Intensity (All Frames)"
 
             title += "\nInsufficient data for regression"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
             self.add_table_row(self.correlation_stats_table, "Analysis Type", f"Temporal ({mode})")
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             if mode == "random" and reference_frame is not None:
                 self.add_table_row(self.correlation_stats_table, "Reference Frame", reference_frame+1)
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(combined_metric_data))
             self.add_table_row(self.correlation_stats_table, "Status", "Insufficient data")
 
         # Set labels and title
-        ax.set_xlabel(f"Current Frame {curvature_type}")
+        ax.set_xlabel(f"Current Frame {metric_name}")
         if mode == "previous":
             ax.set_ylabel('Previous Frame Intensity')
         else:
@@ -2099,7 +2293,7 @@ class MainWindow(QMainWindow):
             else:
                 ax.set_ylabel('Random Frame Intensity')
         ax.set_title(title)
-        if len(combined_curvatures) > 1:
+        if len(combined_metric_data) > 1:
             ax.legend(loc='best')
 
         # Refresh canvas
@@ -2109,8 +2303,8 @@ class MainWindow(QMainWindow):
         self.comparison_figure.clear()
         self.comparison_canvas.draw()
 
-    # Add helper methods for "By Movement Type" analysis with different temporal modes
-    def analyze_movement_temporal_correlation(self, results, curvature_type, mode, reference_frame=None):
+
+    def analyze_movement_temporal_correlation(self, results, metric_type, subtype, mode, reference_frame=None):
         """
         Temporal correlation analysis by movement type
 
@@ -2118,14 +2312,16 @@ class MainWindow(QMainWindow):
         -----------
         results : dict
             Analysis results
-        curvature_type : str
-            Type of curvature to analyze
+        metric_type : str
+            Type of metric to analyze ("Curvature" or "Movement")
+        subtype : str
+            Subtype of the metric (e.g., "Normalized Curvature" or "Movement Score")
         mode : str
             "previous" or "random"
         reference_frame : int, optional
             Reference frame for random mode
         """
-        # Check if we should use a different random frame for each comparison
+        # Check if using "Random Each Time" mode
         random_each_time = (mode == "random" and
                           self.parameter_panel.parameters.get('random_mode') == "Random Each Time")
 
@@ -2160,13 +2356,13 @@ class MainWindow(QMainWindow):
 
         # Collect data by movement type using temporal relationship
         movement_data = {
-            'extending': {'curvatures': [], 'intensities': []},
-            'retracting': {'curvatures': [], 'intensities': []},
-            'stable': {'curvatures': [], 'intensities': []}
+            'extending': {'metric_data': [], 'intensities': []},
+            'retracting': {'metric_data': [], 'intensities': []},
+            'stable': {'metric_data': [], 'intensities': []}
         }
 
         # Process each frame by movement type, using temporal comparison
-        for movement_type, frames in [
+        for movement_type_name, frames in [
             ('extending', extending_frames),
             ('retracting', retracting_frames),
             ('stable', stable_frames)
@@ -2181,17 +2377,51 @@ class MainWindow(QMainWindow):
                     continue
 
                 frame_results = results[frame]
-                if ('curvatures' not in frame_results or
-                    'valid_points' not in frame_results):
+
+                # Check for required data
+                if ('valid_points' not in frame_results):
                     continue
 
-                # Get curvature data
-                if curvature_type == "Sign Curvature":
-                    curvatures = frame_results['curvatures'][0]  # Sign curvature
-                elif curvature_type == "Magnitude Curvature":
-                    curvatures = frame_results['curvatures'][1]  # Magnitude curvature
-                elif curvature_type == "Normalized Curvature":
-                    curvatures = frame_results['curvatures'][2]  # Normalized curvature
+                # Get data based on metric type and subtype
+                if metric_type == "Curvature":
+                    if 'curvatures' not in frame_results:
+                        continue
+
+                    # Map subtype to curvature index
+                    if subtype == "Sign Curvature":
+                        metric_data = frame_results['curvatures'][0]  # Sign curvature
+                    elif subtype == "Magnitude Curvature":
+                        metric_data = frame_results['curvatures'][1]  # Magnitude curvature
+                    elif subtype == "Normalized Curvature":
+                        metric_data = frame_results['curvatures'][2]  # Normalized curvature
+                    else:
+                        continue
+
+                    metric_name = subtype
+
+                elif metric_type == "Movement":
+                    if 'movement_data' not in frame_results:
+                        # Try to generate movement data
+                        self.generate_frame_movement_data(frame)
+
+                        if 'movement_data' not in frame_results:
+                            continue
+
+                    if subtype == "Movement Score":
+                        metric_data = frame_results['movement_data']['scores']
+                        metric_name = "Movement Score"
+                    elif subtype == "Extension/Retraction":
+                        # Convert categorical to numerical
+                        frame_movement_types = frame_results['movement_data']['types']
+                        metric_data = np.zeros(len(frame_movement_types))
+                        for i, mtype in enumerate(frame_movement_types):
+                            if mtype == 'extending':
+                                metric_data[i] = 1
+                            elif mtype == 'retracting':
+                                metric_data[i] = -1
+                        metric_name = "Extension/Retraction"
+                    else:
+                        continue
                 else:
                     continue
 
@@ -2238,12 +2468,12 @@ class MainWindow(QMainWindow):
                     continue
 
                 # Filter data for valid points
-                valid_curvatures = curvatures[valid_points]
+                valid_metric_data = metric_data[valid_points]
                 valid_intensities = ref_intensities[valid_points]
 
                 # Add to movement data
-                movement_data[movement_type]['curvatures'].extend(valid_curvatures)
-                movement_data[movement_type]['intensities'].extend(valid_intensities)
+                movement_data[movement_type_name]['metric_data'].extend(valid_metric_data)
+                movement_data[movement_type_name]['intensities'].extend(valid_intensities)
 
         # Create scatter plot with all movement types
         self.correlation_plot_figure.clear()
@@ -2258,30 +2488,30 @@ class MainWindow(QMainWindow):
 
         # Plot each movement type
         for movement, color in colors.items():
-            move_curvatures = np.array(movement_data[movement]['curvatures'])
-            move_intensities = np.array(movement_data[movement]['intensities'])
+            metric_values = np.array(movement_data[movement]['metric_data'])
+            intensity_values = np.array(movement_data[movement]['intensities'])
 
-            if len(move_curvatures) > 0:
-                ax.scatter(move_curvatures, move_intensities,
+            if len(metric_values) > 0:
+                ax.scatter(metric_values, intensity_values,
                           color=color, alpha=0.5, label=movement.capitalize())
 
         # Add regression lines for each type
         regression_stats = {}
 
         for movement, color in colors.items():
-            move_curvatures = np.array(movement_data[movement]['curvatures'])
-            move_intensities = np.array(movement_data[movement]['intensities'])
+            metric_values = np.array(movement_data[movement]['metric_data'])
+            intensity_values = np.array(movement_data[movement]['intensities'])
 
-            if len(move_curvatures) > 1:
+            if len(metric_values) > 1:
                 # Calculate regression
-                slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(
-                    move_curvatures, move_intensities)
+                slope, intercept, r_value, p_value, std_err = stats.linregress(
+                    metric_values, intensity_values)
 
                 # Create line data
                 try:
                     x_line = np.linspace(
-                        min(move_curvatures),
-                        max(move_curvatures),
+                        min(metric_values),
+                        max(metric_values),
                         100
                     )
                     y_line = slope * x_line + intercept
@@ -2290,7 +2520,7 @@ class MainWindow(QMainWindow):
                     ax.plot(x_line, y_line, color=color, linestyle='-',
                             label=f'{movement.capitalize()}: R²={r_value**2:.3f}')
                 except:
-                    # Handle case where curvatures have no range
+                    # Handle case where metric values have no range
                     pass
 
                 # Store stats
@@ -2299,26 +2529,26 @@ class MainWindow(QMainWindow):
                     'p_value': p_value,
                     'slope': slope,
                     'intercept': intercept,
-                    'sample_size': len(move_curvatures)
+                    'sample_size': len(metric_values)
                 }
 
         # Set labels and title based on mode
-        ax.set_xlabel(f"Current Frame {curvature_type}")
+        ax.set_xlabel(f"Current Frame {metric_name}")
         if mode == "previous":
             ax.set_ylabel('Previous Frame Intensity')
-            title = f"Current Frame {curvature_type} vs Previous Frame Intensity by Movement Type"
+            title_mode = "Previous Frame"
         else:
             if random_each_time:
                 ax.set_ylabel('Random Frames Intensity')
-                title = f"Current Frame {curvature_type} vs Random Frames Intensity by Movement Type"
+                title_mode = "Random Frames"
             elif reference_frame is not None:
                 ax.set_ylabel(f'Frame {reference_frame+1} Intensity')
-                title = f"Current Frame {curvature_type} vs Frame {reference_frame+1} Intensity by Movement Type"
+                title_mode = f"Frame {reference_frame+1}"
             else:
                 ax.set_ylabel('Random Frame Intensity')
-                title = f"Current Frame {curvature_type} vs Random Frame Intensity by Movement Type"
+                title_mode = "Random Frame"
 
-        ax.set_title(title)
+        ax.set_title(f"Current Frame {metric_name} vs {title_mode} Intensity by Movement Type")
         ax.legend(loc='best')
 
         # Refresh canvas
@@ -2327,7 +2557,8 @@ class MainWindow(QMainWindow):
         # Update stats table
         self.correlation_stats_table.setRowCount(0)
         self.add_table_row(self.correlation_stats_table, "Analysis Type", f"Temporal ({mode}) by Movement")
-        self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+        self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+        self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
         if mode == "random":
             if random_each_time:
                 self.add_table_row(self.correlation_stats_table, "Reference Frames", "Different for each point")
@@ -2346,417 +2577,164 @@ class MainWindow(QMainWindow):
         self.current_regression_stats = regression_stats
 
         # Create comparison bar chart
-        self.comparison_figure.clear()
-        ax = self.comparison_figure.add_subplot(111)
-
-        # Get R² values
-        r2_values = []
-        labels = []
-        colors_list = []
-
-        for movement in ['extending', 'retracting', 'stable']:
-            if movement in regression_stats:
-                r2_values.append(regression_stats[movement]['r_squared'])
-                labels.append(movement.capitalize())
-                colors_list.append(colors[movement])
-
-        # Create bar chart
-        bars = ax.bar(labels, r2_values, color=colors_list, alpha=0.7)
-
-        # Add p-value annotations
-        for i, movement in enumerate(['extending', 'retracting', 'stable']):
-            if movement in regression_stats and i < len(r2_values):
-                p_value = regression_stats[movement]['p_value']
-                annotation = f"p={p_value:.3f}"
-                if p_value < 0.001:
-                    annotation = "p<0.001"
-                elif p_value < 0.01:
-                    annotation = "p<0.01"
-                elif p_value < 0.05:
-                    annotation = "p<0.05"
-
-                ax.annotate(annotation, (i, r2_values[i] + 0.02),
-                          ha='center', va='bottom', fontsize=9, rotation=90)
-
-        # Set labels and title based on mode
-        ax.set_xlabel('Movement Type')
-        ax.set_ylabel('R² (Coefficient of Determination)')
-        if mode == "previous":
-            ax.set_title(f'Comparison of Current Frame {curvature_type} vs Previous Frame Intensity Correlation')
-        else:
-            if random_each_time:
-                ax.set_title(f'Comparison of Current Frame {curvature_type} vs Random Frames Intensity Correlation')
-            elif reference_frame is not None:
-                ax.set_title(f'Comparison of Current Frame {curvature_type} vs Frame {reference_frame+1} Intensity Correlation')
-            else:
-                ax.set_title(f'Comparison of Current Frame {curvature_type} vs Random Frame Intensity Correlation')
-
-        # Refresh canvas
-        self.comparison_canvas.draw()
-
-        # Update comparison chart with selected metric
         self.update_comparison_chart()
-        def analyze_movement_temporal_correlation(self, results, curvature_type, mode, reference_frame=None):
-            """
-            Temporal correlation analysis by movement type
 
-            Parameters:
-            -----------
-            results : dict
-                Analysis results
-            curvature_type : str
-                Type of curvature to analyze
-            mode : str
-                "previous" or "random"
-            reference_frame : int, optional
-                Reference frame for random mode
-            """
-            if 'movement_types' not in results:
-                return
 
-            movement_types = results.get('movement_types', [])
-
-            # Group frames by movement type
-            extending_frames = []
-            retracting_frames = []
-            stable_frames = []
-
-            for i, movement_type in enumerate(movement_types):
-                # Movement type is for transitions, so the frame index is i+1
-                frame = i + 1
-                if movement_type == 'extending':
-                    extending_frames.append(frame)
-                elif movement_type == 'retracting':
-                    retracting_frames.append(frame)
-                elif movement_type == 'stable':
-                    stable_frames.append(frame)
-
-            # Find valid frames (with results)
-            valid_frames = []
-            for frame_idx in results.keys():
-                if isinstance(frame_idx, int):
-                    valid_frames.append(frame_idx)
-
-            # Sort the valid frames
-            valid_frames.sort()
-
-            # Collect data by movement type using temporal relationship
-            movement_data = {
-                'extending': {'curvatures': [], 'intensities': []},
-                'retracting': {'curvatures': [], 'intensities': []},
-                'stable': {'curvatures': [], 'intensities': []}
-            }
-
-            # Process each frame by movement type, using temporal comparison
-            for movement_type, frames in [
-                ('extending', extending_frames),
-                ('retracting', retracting_frames),
-                ('stable', stable_frames)
-            ]:
-                for frame in frames:
-                    if frame == 0 and mode == "previous":
-                        # Skip first frame for previous mode
-                        continue
-
-                    # Get current frame data
-                    if frame not in results:
-                        continue
-
-                    frame_results = results[frame]
-                    if ('curvatures' not in frame_results or
-                        'valid_points' not in frame_results):
-                        continue
-
-                    # Get curvature data
-                    if curvature_type == "Sign Curvature":
-                        curvatures = frame_results['curvatures'][0]  # Sign curvature
-                    elif curvature_type == "Magnitude Curvature":
-                        curvatures = frame_results['curvatures'][1]  # Magnitude curvature
-                    elif curvature_type == "Normalized Curvature":
-                        curvatures = frame_results['curvatures'][2]  # Normalized curvature
-                    else:
-                        continue
-
-                    current_valid = frame_results['valid_points']
-
-                    # Determine reference frame based on mode
-                    if mode == "previous":
-                        ref_frame = frame - 1
-                    elif mode == "random":
-                        if reference_frame is not None and reference_frame in valid_frames and reference_frame != frame:
-                            ref_frame = reference_frame
-                        else:
-                            # Pick a random frame that's not the current one
-                            available_frames = [f for f in valid_frames if f != frame]
-                            if not available_frames:
-                                continue
-                            ref_frame = np.random.choice(available_frames)
-                    else:
-                        continue
-
-                    # Get reference frame data
-                    if ref_frame not in results:
-                        continue
-
-                    ref_results = results[ref_frame]
-                    if ('intensities' not in ref_results or
-                        'valid_points' not in ref_results):
-                        continue
-
-                    ref_intensities = ref_results['intensities']
-                    ref_valid = ref_results['valid_points']
-
-                    # Use logical AND of valid points
-                    valid_points = np.logical_and(current_valid, ref_valid)
-
-                    # Skip if no valid points
-                    if not np.any(valid_points):
-                        continue
-
-                    # Filter data for valid points
-                    valid_curvatures = curvatures[valid_points]
-                    valid_intensities = ref_intensities[valid_points]
-
-                    # Add to movement data
-                    movement_data[movement_type]['curvatures'].extend(valid_curvatures)
-                    movement_data[movement_type]['intensities'].extend(valid_intensities)
-
-            # Create scatter plot with all movement types
-            self.correlation_plot_figure.clear()
-            ax = self.correlation_plot_figure.add_subplot(111)
-
-            # Colors for different movement types
-            colors = {
-                'extending': 'blue',
-                'retracting': 'red',
-                'stable': 'gray'
-            }
-
-            # Plot each movement type
-            for movement, color in colors.items():
-                move_curvatures = np.array(movement_data[movement]['curvatures'])
-                move_intensities = np.array(movement_data[movement]['intensities'])
-
-                if len(move_curvatures) > 0:
-                    ax.scatter(move_curvatures, move_intensities,
-                              color=color, alpha=0.5, label=movement.capitalize())
-
-            # Add regression lines for each type
-            regression_stats = {}
-
-            for movement, color in colors.items():
-                move_curvatures = np.array(movement_data[movement]['curvatures'])
-                move_intensities = np.array(movement_data[movement]['intensities'])
-
-                if len(move_curvatures) > 1:
-                    # Calculate regression
-                    slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(
-                        move_curvatures, move_intensities)
-
-                    # Create line data
-                    try:
-                        x_line = np.linspace(
-                            min(move_curvatures),
-                            max(move_curvatures),
-                            100
-                        )
-                        y_line = slope * x_line + intercept
-
-                        # Plot line
-                        ax.plot(x_line, y_line, color=color, linestyle='-',
-                                label=f'{movement.capitalize()}: R²={r_value**2:.3f}')
-                    except:
-                        # Handle case where curvatures have no range
-                        pass
-
-                    # Store stats
-                    regression_stats[movement] = {
-                        'r_squared': r_value**2,
-                        'p_value': p_value,
-                        'slope': slope,
-                        'intercept': intercept,
-                        'sample_size': len(move_curvatures)
-                    }
-
-            # Set labels and title based on mode
-            ax.set_xlabel(f"Current Frame {curvature_type}")
-            if mode == "previous":
-                ax.set_ylabel('Previous Frame Intensity')
-                title = f"Current Frame {curvature_type} vs Previous Frame Intensity by Movement Type"
-            else:
-                if reference_frame is not None:
-                    ax.set_ylabel(f'Frame {reference_frame+1} Intensity')
-                    title = f"Current Frame {curvature_type} vs Frame {reference_frame+1} Intensity by Movement Type"
-                else:
-                    ax.set_ylabel('Random Frame Intensity')
-                    title = f"Current Frame {curvature_type} vs Random Frame Intensity by Movement Type"
-
-            ax.set_title(title)
-            ax.legend(loc='best')
-
-            # Refresh canvas
-            self.correlation_plot_canvas.draw()
-
-            # Update stats table
-            self.correlation_stats_table.setRowCount(0)
-            self.add_table_row(self.correlation_stats_table, "Analysis Type", f"Temporal ({mode}) by Movement")
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
-            if mode == "random" and reference_frame is not None:
-                self.add_table_row(self.correlation_stats_table, "Reference Frame", reference_frame+1)
-
-            # Store regression stats for comparison chart updates
-            self.current_regression_stats = regression_stats
-
-            for movement in ['extending', 'retracting', 'stable']:
-                if movement in regression_stats:
-                    stats_dict = regression_stats[movement]
-                    self.add_table_row(self.correlation_stats_table, f"{movement.capitalize()} R²", stats_dict['r_squared'])
-                    self.add_table_row(self.correlation_stats_table, f"{movement.capitalize()} p-value", stats_dict['p_value'])
-                    self.add_table_row(self.correlation_stats_table, f"{movement.capitalize()} Slope", stats_dict['slope'])
-                    self.add_table_row(self.correlation_stats_table, f"{movement.capitalize()} Sample Size", stats_dict['sample_size'])
-
-            # Create comparison bar chart
-            self.comparison_figure.clear()
-            ax = self.comparison_figure.add_subplot(111)
-
-            # Get R² values
-            r2_values = []
-            labels = []
-            colors_list = []
-
-            for movement in ['extending', 'retracting', 'stable']:
-                if movement in regression_stats:
-                    r2_values.append(regression_stats[movement]['r_squared'])
-                    labels.append(movement.capitalize())
-                    colors_list.append(colors[movement])
-
-            # Create bar chart
-            bars = ax.bar(labels, r2_values, color=colors_list, alpha=0.7)
-
-            # Add p-value annotations
-            for i, movement in enumerate(['extending', 'retracting', 'stable']):
-                if movement in regression_stats and i < len(r2_values):
-                    p_value = regression_stats[movement]['p_value']
-                    annotation = f"p={p_value:.3f}"
-                    if p_value < 0.001:
-                        annotation = "p<0.001"
-                    elif p_value < 0.01:
-                        annotation = "p<0.01"
-                    elif p_value < 0.05:
-                        annotation = "p<0.05"
-
-                    ax.annotate(annotation, (i, r2_values[i] + 0.02),
-                              ha='center', va='bottom', fontsize=9, rotation=90)
-
-            # Set labels and title based on mode
-            ax.set_xlabel('Movement Type')
-            ax.set_ylabel('R² (Coefficient of Determination)')
-            if mode == "previous":
-                ax.set_title(f'Comparison of Current Frame {curvature_type} vs Previous Frame Intensity Correlation')
-            else:
-                if reference_frame is not None:
-                    ax.set_title(f'Comparison of Current Frame {curvature_type} vs Frame {reference_frame+1} Intensity Correlation')
-                else:
-                    ax.set_title(f'Comparison of Current Frame {curvature_type} vs Random Frame Intensity Correlation')
-
-            # Refresh canvas
-            self.comparison_canvas.draw()
-
-            # Update comparison chart with selected metric
-            self.update_comparison_chart()
-
-    def analyze_current_frame_correlation(self, frame_results, curvature_type, ax):
+    def analyze_current_frame_correlation(self, frame_results, metric_type, subtype, ax):
         """Analyze correlation for a single frame"""
         # Check if required data is available
-        if ('curvatures' not in frame_results or
-            'intensities' not in frame_results or
+        if ('intensities' not in frame_results or
             'valid_points' not in frame_results):
             return
 
-        # Map combo box selection to curvature index
-        curvature_index = {
-            "Sign Curvature": 0,
-            "Magnitude Curvature": 1,
-            "Normalized Curvature": 2
-        }.get(curvature_type, 2)
+        # Get data based on metric type and subtype
+        if metric_type == "Curvature":
+            if 'curvatures' not in frame_results:
+                return
 
-        # Get data
-        curvatures = frame_results['curvatures'][curvature_index]
+            # Map subtype to curvature index
+            curvature_index = {
+                "Sign Curvature": 0,
+                "Magnitude Curvature": 1,
+                "Normalized Curvature": 2
+            }.get(subtype, 2)
+
+            metric_data = frame_results['curvatures'][curvature_index]
+            metric_name = subtype
+
+        elif metric_type == "Movement":
+            if 'movement_data' not in frame_results:
+                # Try to generate movement data
+                self.generate_frame_movement_data(self.current_frame)
+
+                if 'movement_data' not in frame_results:
+                    return
+
+            if subtype == "Movement Score":
+                metric_data = frame_results['movement_data']['scores']
+                metric_name = "Movement Score"
+            elif subtype == "Extension/Retraction":
+                # Convert categorical to numerical
+                movement_types = frame_results['movement_data']['types']
+                metric_data = np.zeros(len(movement_types))
+                for i, mtype in enumerate(movement_types):
+                    if mtype == 'extending':
+                        metric_data[i] = 1
+                    elif mtype == 'retracting':
+                        metric_data[i] = -1
+                metric_name = "Extension/Retraction"
+            else:
+                return
+        else:
+            return
+
         intensities = frame_results['intensities']
         valid_points = frame_results['valid_points']
 
         # Filter data for valid points
-        valid_curvatures = curvatures[valid_points]
+        valid_metric = metric_data[valid_points]
         valid_intensities = intensities[valid_points]
 
         # Create scatter plot
-        ax.scatter(valid_curvatures, valid_intensities, alpha=0.7)
+        ax.scatter(valid_metric, valid_intensities, alpha=0.7)
 
         # Add regression line if enough points
-        if len(valid_curvatures) > 1:
-            from scipy import stats
+        if len(valid_metric) > 1:
+            # Calculate regression
             slope, intercept, r_value, p_value, std_err = stats.linregress(
-                valid_curvatures, valid_intensities)
+                valid_metric, valid_intensities)
 
             # Create line data
-            x_line = np.linspace(min(valid_curvatures), max(valid_curvatures), 100)
+            x_line = np.linspace(min(valid_metric), max(valid_metric), 100)
             y_line = slope * x_line + intercept
 
             # Plot line
             ax.plot(x_line, y_line, 'r-', label=f'R² = {r_value**2:.3f}, p = {p_value:.3f}')
 
             # Add stats to title
-            title = f"{curvature_type}-Intensity Correlation (Current Frame)"
-            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_curvatures)}"
+            title = f"{metric_name}-Intensity Correlation (Current Frame)"
+            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_metric)}"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             self.add_table_row(self.correlation_stats_table, "Frame", self.current_frame+1)
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_metric))
             self.add_table_row(self.correlation_stats_table, "R²", r_value**2)
             self.add_table_row(self.correlation_stats_table, "p-value", p_value)
             self.add_table_row(self.correlation_stats_table, "Slope", slope)
             self.add_table_row(self.correlation_stats_table, "Intercept", intercept)
             self.add_table_row(self.correlation_stats_table, "Standard Error", std_err)
         else:
-            title = f"{curvature_type}-Intensity Correlation (Current Frame)\nInsufficient data for regression"
+            title = f"{metric_name}-Intensity Correlation (Current Frame)\nInsufficient data for regression"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             self.add_table_row(self.correlation_stats_table, "Frame", self.current_frame+1)
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_metric))
             self.add_table_row(self.correlation_stats_table, "Status", "Insufficient data")
 
         # Set labels and title
-        ax.set_xlabel(curvature_type)
+        ax.set_xlabel(metric_name)
         ax.set_ylabel('Intensity')
         ax.set_title(title)
-        if len(valid_curvatures) > 1:
+        if len(valid_metric) > 1:
             ax.legend(loc='best')
 
-    def analyze_temporal_frame_correlation(self, current_results, reference_results, curvature_type,
+    def analyze_temporal_frame_correlation(self, current_results, reference_results, metric_type, subtype,
                                          reference_label, ax):
-        """Analyze correlation between current frame curvature and reference frame intensity"""
+        """Analyze correlation between current frame metric and reference frame intensity"""
         # Check if required data is available
-        if ('curvatures' not in current_results or
-            'intensities' not in reference_results or
+        if ('intensities' not in reference_results or
             'valid_points' not in current_results or
             'valid_points' not in reference_results):
             return
 
-        # Map combo box selection to curvature index
-        curvature_index = {
-            "Sign Curvature": 0,
-            "Magnitude Curvature": 1,
-            "Normalized Curvature": 2
-        }.get(curvature_type, 2)
+        # Get data based on metric type and subtype
+        if metric_type == "Curvature":
+            if 'curvatures' not in current_results:
+                return
 
-        # Get data
-        curvatures = current_results['curvatures'][curvature_index]
+            # Map subtype to curvature index
+            curvature_index = {
+                "Sign Curvature": 0,
+                "Magnitude Curvature": 1,
+                "Normalized Curvature": 2
+            }.get(subtype, 2)
+
+            metric_data = current_results['curvatures'][curvature_index]
+            metric_name = subtype
+
+        elif metric_type == "Movement":
+            if 'movement_data' not in current_results:
+                # Try to generate movement data
+                self.generate_frame_movement_data(self.current_frame)
+
+                if 'movement_data' not in current_results:
+                    return
+
+            if subtype == "Movement Score":
+                metric_data = current_results['movement_data']['scores']
+                metric_name = "Movement Score"
+            elif subtype == "Extension/Retraction":
+                # Convert categorical to numerical
+                movement_types = current_results['movement_data']['types']
+                metric_data = np.zeros(len(movement_types))
+                for i, mtype in enumerate(movement_types):
+                    if mtype == 'extending':
+                        metric_data[i] = 1
+                    elif mtype == 'retracting':
+                        metric_data[i] = -1
+                metric_name = "Extension/Retraction"
+            else:
+                return
+        else:
+            return
+
         current_valid = current_results['valid_points']
-
         reference_intensities = reference_results['intensities']
         reference_valid = reference_results['valid_points']
 
@@ -2764,58 +2742,60 @@ class MainWindow(QMainWindow):
         valid_points = np.logical_and(current_valid, reference_valid)
 
         # Filter data for valid points
-        valid_curvatures = curvatures[valid_points]
+        valid_metric = metric_data[valid_points]
         valid_intensities = reference_intensities[valid_points]
 
         # Create scatter plot
-        ax.scatter(valid_curvatures, valid_intensities, alpha=0.7)
+        ax.scatter(valid_metric, valid_intensities, alpha=0.7)
 
         # Add regression line if enough points
-        if len(valid_curvatures) > 1:
-            from scipy import stats
+        if len(valid_metric) > 1:
+            # Calculate regression
             slope, intercept, r_value, p_value, std_err = stats.linregress(
-                valid_curvatures, valid_intensities)
+                valid_metric, valid_intensities)
 
             # Create line data
-            x_line = np.linspace(min(valid_curvatures), max(valid_curvatures), 100)
+            x_line = np.linspace(min(valid_metric), max(valid_metric), 100)
             y_line = slope * x_line + intercept
 
             # Plot line
             ax.plot(x_line, y_line, 'r-', label=f'R² = {r_value**2:.3f}, p = {p_value:.3f}')
 
             # Add stats to title
-            title = f"Current Frame {curvature_type} vs {reference_label} Intensity"
-            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_curvatures)}"
+            title = f"Current Frame {metric_name} vs {reference_label} Intensity"
+            title += f"\nR² = {r_value**2:.3f}, p-value = {p_value:.3f}, n = {len(valid_metric)}"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
             self.add_table_row(self.correlation_stats_table, "Analysis Type", f"Current vs {reference_label}")
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             self.add_table_row(self.correlation_stats_table, "Current Frame", self.current_frame+1)
             self.add_table_row(self.correlation_stats_table, "Reference Frame", reference_label)
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_metric))
             self.add_table_row(self.correlation_stats_table, "R²", r_value**2)
             self.add_table_row(self.correlation_stats_table, "p-value", p_value)
             self.add_table_row(self.correlation_stats_table, "Slope", slope)
             self.add_table_row(self.correlation_stats_table, "Intercept", intercept)
             self.add_table_row(self.correlation_stats_table, "Standard Error", std_err)
         else:
-            title = f"Current Frame {curvature_type} vs {reference_label} Intensity\nInsufficient data for regression"
+            title = f"Current Frame {metric_name} vs {reference_label} Intensity\nInsufficient data for regression"
 
             # Update stats table
             self.correlation_stats_table.setRowCount(0)
             self.add_table_row(self.correlation_stats_table, "Analysis Type", f"Current vs {reference_label}")
-            self.add_table_row(self.correlation_stats_table, "Curvature Type", curvature_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Type", metric_type)
+            self.add_table_row(self.correlation_stats_table, "Metric Subtype", subtype)
             self.add_table_row(self.correlation_stats_table, "Current Frame", self.current_frame+1)
             self.add_table_row(self.correlation_stats_table, "Reference Frame", reference_label)
-            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_curvatures))
+            self.add_table_row(self.correlation_stats_table, "Sample Size", len(valid_metric))
             self.add_table_row(self.correlation_stats_table, "Status", "Insufficient data")
 
         # Set labels and title
-        ax.set_xlabel(f"Current Frame {curvature_type}")
+        ax.set_xlabel(f"Current Frame {metric_name}")
         ax.set_ylabel(f'{reference_label} Intensity')
         ax.set_title(title)
-        if len(valid_curvatures) > 1:
+        if len(valid_metric) > 1:
             ax.legend(loc='best')
 
 
@@ -3035,8 +3015,14 @@ class MainWindow(QMainWindow):
         # Get parameters from UI
         try_rotation = self.parameter_panel.parameters.get('try_rotation', False)
         exclude_endpoints = self.parameter_panel.parameters.get('exclude_endpoints', False)
+        angular_distribution = self.parameter_panel.parameters.get('angular_distribution', False)
+        axis_based_distribution = self.parameter_panel.parameters.get('axis_based_distribution', False)
+        x_axis_distribution = self.parameter_panel.parameters.get('x_axis_distribution', False)
 
-        print(f"DEBUG: Analyzing current frame with try_rotation={try_rotation}, exclude_endpoints={exclude_endpoints}")
+        print(f"DEBUG: Analyzing current frame with try_rotation={try_rotation}, "
+              f"exclude_endpoints={exclude_endpoints}, angular_distribution={angular_distribution}, "
+              f"axis_based_distribution={axis_based_distribution}, "
+              f"x_axis_distribution={x_axis_distribution}")
 
         params = {
             'n_points': self.n_points_spin.value(),
@@ -3044,8 +3030,12 @@ class MainWindow(QMainWindow):
             'width': self.width_spin.value(),
             'min_cell_coverage': self.min_coverage_spin.value(),
             'try_rotation': try_rotation,
-            'exclude_endpoints': exclude_endpoints
+            'exclude_endpoints': exclude_endpoints,
+            'angular_distribution': angular_distribution,
+            'axis_based_distribution': axis_based_distribution,
+            'x_axis_distribution': x_axis_distribution
         }
+
 
         # Get current frame data
         frame = self.current_frame
@@ -3565,34 +3555,82 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        try:
-            # Load images
-            images = self.file_manager.load_image_stack(file_path)
+        # Show loading indicator
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.progress_bar.setVisible(True)
+        self.statusBar().showMessage("Loading image stack, please wait...")
 
-            # Store in loaded data
-            self.loaded_data['images'] = images
-            self.loaded_data['image_path'] = file_path
+        # Create a worker thread for file loading
+        class LoadImageWorker(QThread):
+            finished = pyqtSignal(object)
+            error = pyqtSignal(str)
 
-            # Update UI
-            self.image_type_combo.setCurrentIndex(0)  # Set to "Original Image"
-            self.update_image_display()
+            def __init__(self, file_path, parent=None):
+                super().__init__(parent)
+                self.file_path = file_path
 
-            # Update frame controls
-            self.current_frame = 0
-            self.frame_label.setText(f"Frame: 1/{images.shape[0]}")
+            def run(self):
+                try:
+                    # Load images with tifffile
+                    images = tifffile.imread(self.file_path)
 
-            # Update movement frame spinner (minimum is 1, maximum is last frame)
-            self.movement_frame_spin.setMinimum(1)
-            self.movement_frame_spin.setMaximum(max(1, images.shape[0] - 1))
-            self.movement_frame_spin.setValue(1)  # Set to first frame with movement data
+                    # Handle single image case
+                    if images.ndim == 2:
+                        images = images[np.newaxis, ...]
 
-            # Log
-            self.log_console.log(f"Loaded image stack: {file_path} ({images.shape[0]} frames)")
-            self.statusBar().showMessage(f"Loaded {images.shape[0]} frames")
+                    self.finished.emit(images)
+                except Exception as e:
+                    self.error.emit(str(e))
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load image stack: {str(e)}")
-            self.log_console.log(f"Error loading image stack: {str(e)}", self.log_console.ERROR)
+        # Create and start the worker
+        self.image_loader = LoadImageWorker(file_path)
+        self.image_loader.finished.connect(self.image_loading_finished)
+        self.image_loader.error.connect(self.image_loading_error)
+        self.image_loader.start()
+
+    def image_loading_finished(self, images):
+        """Handle successful image loading"""
+        # Store loaded images
+        self.loaded_data['images'] = images
+        self.loaded_data['image_path'] = self.image_loader.file_path
+
+        # Update UI
+        self.image_type_combo.setCurrentIndex(0)  # Set to "Original Image"
+        self.update_image_display()
+
+        # Update frame controls
+        self.current_frame = 0
+        self.frame_label.setText(f"Frame: 1/{images.shape[0]}")
+
+        # Update movement frame spinner
+        self.movement_frame_spin.setMinimum(1)
+        self.movement_frame_spin.setMaximum(max(1, images.shape[0] - 1))
+        self.movement_frame_spin.setValue(1)
+
+        # Hide progress bar
+        self.progress_bar.setVisible(False)
+        self.statusBar().showMessage(f"Loaded {images.shape[0]} frames")
+
+        # Log
+        self.log_console.log(f"Loaded image stack: {self.image_loader.file_path} ({images.shape[0]} frames)")
+
+        # Clean up
+        self.image_loader.deleteLater()
+        self.image_loader = None
+
+    def image_loading_error(self, error_message):
+        """Handle image loading errors"""
+        # Hide progress bar
+        self.progress_bar.setVisible(False)
+        self.statusBar().showMessage("Failed to load image stack")
+
+        # Show error
+        QMessageBox.critical(self, "Error", f"Failed to load image stack: {error_message}")
+        self.log_console.log(f"Error loading image stack: {error_message}", self.log_console.ERROR)
+
+        # Clean up
+        self.image_loader.deleteLater()
+        self.image_loader = None
 
 
     def open_mask_stack(self):
@@ -3605,35 +3643,86 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        try:
-            # Load masks
-            masks = self.file_manager.load_mask_stack(file_path)
+        # Show loading indicator
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.progress_bar.setVisible(True)
+        self.statusBar().showMessage("Loading mask stack, please wait...")
 
-            # Check if masks match the dimensions of loaded images
-            if 'images' in self.loaded_data and self.loaded_data['images'] is not None:
-                images = self.loaded_data['images']
-                if images.shape[0] != masks.shape[0]:
-                    QMessageBox.warning(self, "Warning",
-                                        f"Mask stack contains {masks.shape[0]} frames, but image stack has {images.shape[0]} frames.")
-                if images.shape[1:] != masks.shape[1:]:
-                    QMessageBox.warning(self, "Warning",
-                                        f"Mask dimensions ({masks.shape[1:]}) do not match image dimensions ({images.shape[1:]}).")
+        # Create a worker thread for file loading
+        class LoadMaskWorker(QThread):
+            finished = pyqtSignal(object)
+            error = pyqtSignal(str)
 
-            # Store in loaded data
-            self.loaded_data['masks'] = masks
-            self.loaded_data['mask_path'] = file_path
+            def __init__(self, file_path, parent=None):
+                super().__init__(parent)
+                self.file_path = file_path
 
-            # Update UI if set to show masks
-            if self.image_type_combo.currentText() == "Binary Mask":
-                self.update_image_display()
+            def run(self):
+                try:
+                    # Load masks with tifffile
+                    masks = tifffile.imread(self.file_path)
 
-            # Log
-            self.log_console.log(f"Loaded mask stack: {file_path} ({masks.shape[0]} frames)")
-            self.statusBar().showMessage(f"Loaded {masks.shape[0]} mask frames")
+                    # Ensure masks are binary
+                    masks = (masks > 0).astype(np.uint8)
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load mask stack: {str(e)}")
-            self.log_console.log(f"Error loading mask stack: {str(e)}", self.log_console.ERROR)
+                    # Handle single image case
+                    if masks.ndim == 2:
+                        masks = masks[np.newaxis, ...]
+
+                    self.finished.emit(masks)
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        # Create and start the worker
+        self.mask_loader = LoadMaskWorker(file_path)
+        self.mask_loader.finished.connect(self.mask_loading_finished)
+        self.mask_loader.error.connect(self.mask_loading_error)
+        self.mask_loader.start()
+
+    def mask_loading_finished(self, masks):
+        """Handle successful mask loading"""
+        # Check if masks match the dimensions of loaded images
+        if 'images' in self.loaded_data and self.loaded_data['images'] is not None:
+            images = self.loaded_data['images']
+            if images.shape[0] != masks.shape[0]:
+                QMessageBox.warning(self, "Warning",
+                                    f"Mask stack contains {masks.shape[0]} frames, but image stack has {images.shape[0]} frames.")
+            if images.shape[1:] != masks.shape[1:]:
+                QMessageBox.warning(self, "Warning",
+                                    f"Mask dimensions ({masks.shape[1:]}) do not match image dimensions ({images.shape[1:]}).")
+
+        # Store loaded masks
+        self.loaded_data['masks'] = masks
+        self.loaded_data['mask_path'] = self.mask_loader.file_path
+
+        # Update UI if set to show masks
+        if self.image_type_combo.currentText() == "Binary Mask":
+            self.update_image_display()
+
+        # Hide progress bar
+        self.progress_bar.setVisible(False)
+        self.statusBar().showMessage(f"Loaded {masks.shape[0]} mask frames")
+
+        # Log
+        self.log_console.log(f"Loaded mask stack: {self.mask_loader.file_path} ({masks.shape[0]} frames)")
+
+        # Clean up
+        self.mask_loader.deleteLater()
+        self.mask_loader = None
+
+    def mask_loading_error(self, error_message):
+        """Handle mask loading errors"""
+        # Hide progress bar
+        self.progress_bar.setVisible(False)
+        self.statusBar().showMessage("Failed to load mask stack")
+
+        # Show error
+        QMessageBox.critical(self, "Error", f"Failed to load mask stack: {error_message}")
+        self.log_console.log(f"Error loading mask stack: {error_message}", self.log_console.ERROR)
+
+        # Clean up
+        self.mask_loader.deleteLater()
+        self.mask_loader = None
 
 
 
@@ -3647,8 +3736,14 @@ class MainWindow(QMainWindow):
         # Get parameters
         try_rotation = self.parameter_panel.parameters.get('try_rotation', False)
         exclude_endpoints = self.parameter_panel.parameters.get('exclude_endpoints', False)
+        angular_distribution = self.parameter_panel.parameters.get('angular_distribution', False)
+        axis_based_distribution = self.parameter_panel.parameters.get('axis_based_distribution', False)
+        x_axis_distribution = self.parameter_panel.parameters.get('x_axis_distribution', False)
 
-        print(f"DEBUG: Starting analysis with try_rotation={try_rotation}, exclude_endpoints={exclude_endpoints}")
+        print(f"DEBUG: Starting analysis with try_rotation={try_rotation}, "
+              f"exclude_endpoints={exclude_endpoints}, angular_distribution={angular_distribution}, "
+              f"axis_based_distribution={axis_based_distribution}, "
+              f"x_axis_distribution={x_axis_distribution}")
 
         params = {
             'image_path': self.loaded_data.get('image_path', ''),
@@ -3659,9 +3754,11 @@ class MainWindow(QMainWindow):
             'width': self.width_spin.value(),
             'min_cell_coverage': self.min_coverage_spin.value(),
             'try_rotation': try_rotation,
-            'exclude_endpoints': exclude_endpoints
+            'exclude_endpoints': exclude_endpoints,
+            'angular_distribution': angular_distribution,
+            'axis_based_distribution': axis_based_distribution,
+            'x_axis_distribution': x_axis_distribution
         }
-
 
         # Log all parameters
         print(f"DEBUG: Analysis parameters:")
@@ -3906,6 +4003,40 @@ class MainWindow(QMainWindow):
                 frame_results.get('recovered_by_rotation'),
                 frame_results.get('exclude_endpoints', False)
             )
+
+
+        # Add movement visualization if checkbox is checked and data exists
+        try:
+            if (self.show_movement_cb.isChecked()):
+                # Try to generate movement data if it doesn't exist
+                if 'movement_data' not in frame_results:
+                    self.generate_frame_movement_data(self.current_frame)
+
+                # If we now have movement data, display it
+                if 'movement_data' in frame_results and 'points' in frame_results:
+                    movement_scores = frame_results['movement_data']['scores']
+                    movement_types = frame_results['movement_data']['types']
+
+                    # Create color-coded points based on movement types
+                    colors = []
+                    for mtype in movement_types:
+                        if mtype == 'extending':
+                            colors.append('blue')
+                        elif mtype == 'retracting':
+                            colors.append('red')
+                        else:
+                            colors.append('gray')
+
+                    self.overlay_canvas.add_movement_visualization(
+                        frame_results['points'],
+                        movement_scores,
+                        colors,
+                        marker_size=self.marker_size_spin.value()
+                    )
+        except Exception as e:
+            # Log error but continue
+            print(f"Error updating movement overlay: {str(e)}")
+
 
         # Update canvas
         self.overlay_canvas.update_canvas()
@@ -4755,3 +4886,5 @@ class MainWindow(QMainWindow):
 
         # Show dialog
         dialog.exec_()
+
+
