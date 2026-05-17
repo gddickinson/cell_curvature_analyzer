@@ -133,3 +133,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - This tool builds upon the curvature analysis approach described in [reference to relevant papers]
 - Thanks to all contributors and the scientific community for feedback and suggestions
+
+
+---
+*Built with AI assistance from [Claude (Anthropic)](https://claude.com/).*
