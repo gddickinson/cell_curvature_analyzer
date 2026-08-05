@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "cell_curvature_analyzer"
+abstract: "GUI application for analyzing the relationship between cell-membrane curvature and PIEZO1 protein locations from fluorescence microscope recordings"
+authors:
+  - family-names: Dickinson
+    given-names: "George D."
+    orcid: https://orcid.org/0000-0001-7711-0388
+    affiliation: University of California, Irvine
+repository-code: "https://github.com/gddickinson/cell_curvature_analyzer"
+url: "https://github.com/gddickinson/cell_curvature_analyzer"
+license: MIT
+date-released: 2025-04-04
+preferred-citation:
+  type: article
+  title: "Visualizing PIEZO1 localization and activity in hiPSC-derived single cells and organoids with HaloTag technology"
+  authors:
+    - family-names: Bertaccini
+      given-names: "Gabriella A."
+    - family-names: Casanellas
+      given-names: "Ignasi"
+    - family-names: Evans
+      given-names: "Elizabeth L."
+    - family-names: Nourse
+      given-names: "Jamison L."
+    - family-names: Dickinson
+      given-names: "George D."
+    - family-names: Pathak
+      given-names: "Medha M."
+  journal: "Nature Communications"
+  volume: 16
+  start: 5556
+  year: 2025
+  doi: 10.1038/s41467-025-59150-1
