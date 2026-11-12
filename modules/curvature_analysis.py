@@ -173,8 +173,11 @@ class CurvatureAnalyzer:
             # Analyze edge movement (for frame 1 and onward)
             if frame_idx > 0:
                 previous_mask = masks[frame_idx - 1]
+                # The contour list skips frames without a cell, so look the previous contour up by frame
+                # (detect_edge_movement compares the masks; the contours are passed for reference only).
+                previous_contour = results[frame_idx - 1]["contour_data"] if (frame_idx - 1) in results else np.array([])
                 movement_score, movement_type, movement_map = self.detect_edge_movement(
-                    contour, all_contours[frame_idx - 1], mask, previous_mask
+                    contour, previous_contour, mask, previous_mask
                 )
 
                 # Store movement data
