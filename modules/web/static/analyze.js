@@ -1,0 +1,174 @@
+// Analyze page: load an image + mask (TIFF/PNG) or the synthetic demo, set parameters, run the analysis (Python on
+// the local app, the JS port on the static site), and explore the frame overlay, profiles, scatter and statistics.
+import { route, app, api, esc, isStatic, $, download } from './core.js';
+import { readStack, pairStacks, demoStack, analyzeBody } from './stack_io.js';
+import { drawFrame, frameProfiles, statsTable, curvColor, colourValues, maxDiff } from './analyze_view.js';
+import { scatterPlot, fmt } from './plots.js';
+
+const S = { pair: null, result: null, demo: null, source: '', isDemo: false, frame: 0, colorBy: 'normalized', regions: true,
+  umPerPx: null, umFromFile: false, imgFile: null, maskFile: null, note: '' };
+
+const PARAMS = [
+  ['n_points', 'Number of points', 'number', 3, 2000, 1, 'Equidistant sample points along the edge'],
+  ['depth', 'Sampling depth (px)', 'number', 1, 500, 1, 'How far each rectangle reaches into the cell'],
+  ['width', 'Sampling width (px)', 'number', 1, 200, 1, 'Rectangle width along the edge'],
+  ['min_cell_coverage', 'Min. cell coverage', 'number', 0, 1, 0.05, 'Fraction of the rectangle that must be inside the mask'],
+  ['movement_threshold', 'Movement threshold', 'number', 0, 1, 0.01, '|score| above this = extending / retracting'],
+];
+
+function paramForm(d) {
+  return `<div class="params">${PARAMS.map(([k, label, , min, max, step, help]) => `<div><label for="p-${k}">${label}</label>
+    <input id="p-${k}" type="number" min="${min}" max="${max}" step="${step}" value="${d[k]}" title="${esc(help)}"></div>`).join('')}</div>
+    <label class="check"><input type="checkbox" id="p-try_rotation" ${d.try_rotation ? 'checked' : ''}>Try rotation (retry rejected rectangles pointing outwards)</label>
+    <label class="check"><input type="checkbox" id="p-exclude_endpoints" ${d.exclude_endpoints ? 'checked' : ''}>Exclude end points (open, border-touching edges)</label>`;
+}
+
+function readParams() {
+  const p = {};
+  for (const [k] of PARAMS) p[k] = +$('#p-' + k).value;
+  p.n_points = Math.round(p.n_points); p.depth = Math.round(p.depth); p.width = Math.round(p.width);
+  p.try_rotation = $('#p-try_rotation').checked; p.exclude_endpoints = $('#p-exclude_endpoints').checked;
+  return p;
+}
+
+function setStatus(msg, err = false) { const el = $('#status'); if (el) { el.textContent = msg; el.className = err ? 'progress err' : 'progress'; } }
+
+async function run() {
+  if (!S.pair) { setStatus('Load an image and a mask first (or the demo).', true); return; }
+  const btn = $('#run'); btn.disabled = true;
+  setStatus(isStatic() ? 'Analysing in your browser...' : 'Analysing in Python...');
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const t0 = performance.now();
+    S.result = await api('/analyze', { body: analyzeBody(S.pair, readParams()) });
+    S.note = '';
+    if (isStatic() && S.isDemo && S.demo) {
+      const dp = S.demo.result.params, sameParams = Object.keys(dp).every(k => S.result.params[k] === dp[k]);
+      if (sameParams) S.note = `This in-browser result agrees with the Python result shipped with the demo: max relative difference ${maxDiff(S.result, S.demo.result).toExponential(1)}.`;
+    }
+    S.frame = Math.min(S.frame, S.pair.images.length - 1);
+    setStatus(`Done in ${((performance.now() - t0) / 1000).toFixed(2)} s.`);
+    renderResults();
+  } catch (e) {
+    console.warn(e); setStatus(e.message, true);
+  } finally { btn.disabled = false; }
+}
+
+async function loadFiles() {
+  if (!S.imgFile || !S.maskFile) { setStatus(S.imgFile || S.maskFile ? 'Now choose the other file.' : ''); return; }
+  try {
+    setStatus('Reading files...');
+    const [img, mask] = await Promise.all([readStack(S.imgFile), readStack(S.maskFile)]);
+    S.pair = pairStacks(img, mask); S.isDemo = false; S.result = null; S.frame = 0;
+    S.source = `${esc(img.name)} (${img.frames.length} frame${img.frames.length > 1 ? 's' : ''}) + mask ${esc(mask.name)} (${mask.frames.length}), ${img.width} × ${img.height} px`;
+    S.umFromFile = img.umPerPx !== null;
+    S.umPerPx = img.umPerPx;
+    $('#um').value = S.umPerPx ?? '';
+    $('#um-note').textContent = S.umFromFile ? 'read from the image file' : 'not in the file: enter it to report lengths in µm';
+    const empty = S.pair.masks.filter(m => !m.some(v => v)).length;
+    $('#source').innerHTML = S.source + (empty ? ` <span class="err">(${empty} mask frame(s) are empty)</span>` : '');
+    await run();
+  } catch (e) { console.warn(e); setStatus(e.message, true); }
+}
+
+async function loadDemo() {
+  setStatus('Loading the synthetic demo...');
+  S.demo = S.demo || await api('/demo');
+  S.pair = demoStack(S.demo); S.isDemo = true; S.result = null; S.frame = 0; S.umPerPx = null; S.umFromFile = false;
+  $('#um').value = ''; $('#um-note').textContent = 'synthetic data has no physical scale';
+  S.source = `<span class="sim-badge">SYNTHETIC</span> ${S.demo.shape[0]} frames, ${S.demo.shape[2]} × ${S.demo.shape[1]} px, generated by <code>modules/synthetic_cell.py</code>
+    (seed ${S.demo.spec.seed}). Fluorescence is enriched where the edge is concave <b>by construction</b>, so a negative slope is built in, not a finding.`;
+  $('#source').innerHTML = S.source;
+  await run();
+}
+
+function lengthNote(f) {
+  if (!f || f.error) return '';
+  let L = 0;
+  for (let i = 0; i < f.contour.length - 1; i++) L += Math.hypot(f.contour[i + 1][0] - f.contour[i][0], f.contour[i + 1][1] - f.contour[i][1]);
+  const step = L / S.result.params.n_points, um = S.umPerPx;
+  const u = v => (um ? ` = ${fmt(v * um)} µm` : '');
+  return `Edge length ${fmt(L)} px${u(L)}; point spacing ${fmt(step)} px${u(step)}; rectangles ${S.result.params.depth} × ${S.result.params.width} px${um ? ` = ${fmt(S.result.params.depth * um)} × ${fmt(S.result.params.width * um)} µm` : ''}.
+    ${step < 6 ? '<span class="err">Spacing under ~6 px: the pixel staircase of the mask makes single-point signs noisy (see Curvature sign).</span>' : ''}
+    ${um ? '' : 'No pixel size given: lengths in pixels; curvature is dimensionless.'}`;
+}
+
+function drawCurrent() {
+  const r = S.result, f = r.frames[S.frame];
+  drawFrame($('#cv'), S.pair, r, S.frame, { colorBy: S.colorBy, regions: S.regions });
+  $('#frame-info').innerHTML = f.error ? `<span class="err">Frame ${S.frame}: ${esc(f.error)}</span>`
+    : `Frame ${S.frame}: ${f.valid.filter(Boolean).length} of ${f.points.length} points valid${f.recovered.some(Boolean) ? `, ${f.recovered.filter(Boolean).length} by rotation` : ''}. ${lengthNote(f)}`;
+  frameProfiles($('#prof-c'), $('#prof-i'), f, S.colorBy);
+  const which = S.colorBy === 'sign' ? 'sign' : 'normalized', pts = [];
+  r.frames.forEach((fr, t) => { if (!fr.error) fr.valid.forEach((ok, i) => { if (ok) pts.push({ x: fr[which][i] + (which === 'sign' ? (i % 7 - 3) * 0.025 : 0), y: fr.intensities[i], color: t === S.frame ? curvColor(colourValues(fr, which)[i]) : 'rgba(150,160,190,.45)' }); }); });
+  scatterPlot($('#scatter'), pts, r.stats[which], { xlabel: `${which} curvature${which === 'sign' ? ' (jittered)' : ''}`, ylabel: 'intensity',
+    title: 'Intensity vs curvature', legendItems: [{ color: 'var(--accent)', label: `least-squares fit, all frames (r² ${fmt(r.stats[which].r_squared)}, p ${fmt(r.stats[which].p_value)})` },
+      { color: 'rgba(150,160,190,.8)', label: 'other frames', dot: true }, { color: '#ff8a3d', label: 'current frame', dot: true }] });
+}
+
+function renderResults() {
+  const r = S.result, el = $('#results');
+  const ok = r.frames.filter(f => !f.error), valid = ok.reduce((s, f) => s + f.valid.filter(Boolean).length, 0);
+  const total = ok.reduce((s, f) => s + f.points.length, 0), st = r.stats.normalized;
+  const mv = r.movement.length ? `<h3>Edge movement (masks compared frame to frame)</h3><div class="scroll"><table><thead><tr><th>frame</th><th>type</th>
+    <th class="num">score</th><th class="num">gained px</th><th class="num">lost px</th></tr></thead><tbody>${r.movement.map(m => `<tr><td>${m.frame - 1} → ${m.frame}</td>
+    <td>${m.type}</td><td class="num">${fmt(m.score)}</td><td class="num">${m.extended_px}</td><td class="num">${m.retracted_px}</td></tr>`).join('')}</tbody></table></div>
+    <p class="small mute">score = (gained − lost) / (gained + lost) pixels; |score| &gt; ${r.params.movement_threshold} counts as extending / retracting.</p>` : '';
+  el.innerHTML = `<div class="tiles"><div class="tile"><b>${ok.length}/${r.n_frames}</b><span>frames with a cell edge</span></div>
+      <div class="tile"><b>${valid}/${total}</b><span>valid sampling rectangles</span></div>
+      <div class="tile"><b>${fmt(st.r_squared)}</b><span>r², intensity ~ normalized curvature</span></div>
+      <div class="tile"><b>${fmt(st.slope)}</b><span>slope (intensity per unit normalized curvature)</span></div></div>
+    ${S.note ? `<p class="small ok">${esc(S.note)}</p>` : ''}
+    <div class="row"><div><div class="seg" role="group" aria-label="Colour points by">${['normalized', 'sign', 'magnitude'].map(k => `<button data-by="${k}" class="${S.colorBy === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
+      <div><label class="check"><input type="checkbox" id="show-reg" ${S.regions ? 'checked' : ''}>Show sampling rectangles</label></div>
+      ${r.n_frames > 1 ? `<div><label for="fr">Frame <b id="fr-v">${S.frame}</b> of ${r.n_frames - 1}</label><input type="range" id="fr" min="0" max="${r.n_frames - 1}" value="${S.frame}"></div>` : ''}</div>
+    <div class="stage"><canvas id="cv" role="img" aria-label="Frame with cell edge, sample points coloured by curvature and sampling rectangles"></canvas></div>
+    <div class="colorbar" aria-hidden="true"></div><div class="cbar-l"><span>−1 concave (bends into the cell)</span><span>0</span><span>+1 convex (bulges out)</span></div>
+    <p class="small" id="frame-info"></p>
+    <p class="small mute">Ringed point: start of the walk along the edge. Rectangles: white = valid, red dashed = rejected (too little cell coverage), yellow = recovered by rotation.</p>
+    <div class="two"><div><h3>Curvature along the edge</h3><div id="prof-c"></div></div><div><h3>Intensity along the edge</h3><div id="prof-i"></div></div></div>
+    <h3>Intensity vs curvature (valid points, all frames)</h3><div id="scatter"></div>
+    ${statsTable(r.stats)}${mv}
+    <button id="csv" class="alt">Download points CSV</button><button id="json" class="alt">Download results JSON</button>`;
+  el.querySelectorAll('[data-by]').forEach(b => b.onclick = () => { S.colorBy = b.dataset.by; el.querySelectorAll('[data-by]').forEach(x => x.classList.toggle('on', x === b)); drawCurrent(); });
+  $('#show-reg').onchange = e => { S.regions = e.target.checked; drawCurrent(); };
+  const fr = $('#fr');
+  if (fr) fr.oninput = () => { S.frame = +fr.value; $('#fr-v').textContent = S.frame; drawCurrent(); };
+  $('#csv').onclick = () => download('curvature_points.csv', toCSV(r), 'text/csv');
+  $('#json').onclick = () => download('curvature_results.json', JSON.stringify({ params: r.params, um_per_px: S.umPerPx, stats: r.stats, movement: r.movement }, null, 2), 'application/json');
+  drawCurrent();
+}
+
+function toCSV(r) {
+  const um = S.umPerPx, rows = [`# um_per_px=${um ?? 'not set (lengths in px)'}; params=${JSON.stringify(r.params)}`,
+    'frame,point,row_px,col_px,curvature_sign,curvature_magnitude,curvature_normalized,intensity,valid,recovered_by_rotation'];
+  for (const f of r.frames) if (!f.error) f.points.forEach((p, i) => rows.push([f.frame, i, p[0], p[1], f.sign[i], f.magnitude[i], f.normalized[i], f.intensities[i] ?? '', f.valid[i], f.recovered[i]].join(',')));
+  return rows.join('\n') + '\n';
+}
+
+route('analyze', async (args) => {
+  const info = await api('/info');
+  app().innerHTML = `<p class="kicker">Analyze</p><h1>Curvature vs fluorescence</h1>
+    <p class="lead">Load a fluorescence image and its binary cell mask (TIFF stacks or PNG). Each frame's cell edge is sampled at
+      equidistant points; curvature is measured at each point and fluorescence averaged in a rectangle reaching into the cell.
+      ${isStatic() ? 'Everything runs in your browser: files are not uploaded anywhere.' : 'The local Python server runs the analysis.'}</p>
+    <div class="side"><div class="panel">
+      <button id="demo">Load demo (synthetic)</button>
+      <div class="drop"><label for="f-img">Fluorescence image (.tif, .png)</label><input type="file" id="f-img" accept=".tif,.tiff,.png,.jpg,.jpeg,image/*">
+        <label for="f-mask">Cell mask (non-zero = cell)</label><input type="file" id="f-mask" accept=".tif,.tiff,.png,image/*"></div>
+      <label for="um">Pixel size (µm/px) <span class="mute small" id="um-note">optional</span></label><input type="number" id="um" min="0" step="0.001" placeholder="not set">
+      <h3>Parameters</h3>${paramForm(info.defaults)}
+      <button id="run">Run analysis</button><button id="reset" class="alt">Defaults</button>
+      <p id="status" class="progress" role="status"></p>
+      <p class="small mute">Sampling: equidistant along the contour (the desktop "Standard" method). The angular, axis-based and
+        x-axis sampling options are in the desktop app only.</p>
+    </div><div><p class="small" id="source">${S.source || 'No data loaded yet.'}</p><div id="results"></div></div></div>`;
+  $('#demo').onclick = loadDemo;
+  $('#run').onclick = run;
+  $('#reset').onclick = () => { for (const [k] of PARAMS) $('#p-' + k).value = info.defaults[k]; $('#p-try_rotation').checked = info.defaults.try_rotation; $('#p-exclude_endpoints').checked = info.defaults.exclude_endpoints; };
+  $('#f-img').onchange = e => { S.imgFile = e.target.files[0]; loadFiles(); };
+  $('#f-mask').onchange = e => { S.maskFile = e.target.files[0]; loadFiles(); };
+  $('#um').oninput = e => { S.umPerPx = +e.target.value > 0 ? +e.target.value : null; if (S.result) drawCurrent(); };
+  if (S.umPerPx) $('#um').value = S.umPerPx;
+  if (S.result) { if (S.result.params) for (const [k] of PARAMS) $('#p-' + k).value = S.result.params[k]; renderResults(); } else if (args[0] === 'demo') await loadDemo();
+});

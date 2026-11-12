@@ -1,0 +1,32 @@
+/* Project accents (mint / pink / periwinkle) and page styles for Cell Curvature Analyzer. Shared theme: style.css.
+   Curvature colours: convex (+, bulges out of the cell) orange, concave (-) blue. */
+:root { --accent:#5cf2c4; --accent2:#ff6b9a; --accent3:#8fb3ff; --glow:rgba(92,242,196,.13);
+  --convex:#ff8a3d; --concave:#4f9dff; }
+button, .btn { color:#02130d; }
+.seg button.on { color:#02130d; }
+.plot { width:100%; height:auto; display:block; font:11px var(--mono); }
+.plot text { fill:var(--mute); }
+.plot .axis-label { fill:var(--ink); font-size:12px; }
+.plot .grid-l { stroke:var(--line); stroke-width:.7; }
+.plot .zero-l { stroke:var(--mute); stroke-width:.8; stroke-dasharray:3 3; }
+.plot .axis-box { fill:none; stroke:var(--line); }
+.legend { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--mute); margin-top:6px; }
+.legend i { display:inline-block; width:14px; height:3px; margin-right:6px; vertical-align:middle; border-radius:2px; }
+.legend i.dot { width:9px; height:9px; border-radius:50%; }
+.sim-badge { display:inline-block; font:600 11px var(--mono); letter-spacing:.08em; color:#1a1000; background:var(--warn);
+  padding:1px 7px; border-radius:3px; }
+label.check { display:flex; gap:8px; align-items:center; color:var(--ink); }
+label.check input { margin:0; }
+.stage canvas { image-rendering:pixelated; }
+.stage { background:#000; }
+.colorbar { height:10px; border-radius:3px; background:linear-gradient(90deg, var(--concave), #9aa3b5, var(--convex)); margin:4px 0 2px; }
+.cbar-l { display:flex; justify-content:space-between; font-size:11px; color:var(--mute); font-family:var(--mono); }
+td.num, th.num { text-align:right; font-family:var(--mono); white-space:nowrap; }
+.mini { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+.mini figure { margin:0; } .mini figcaption { font-size:13px; color:var(--mute); margin-top:4px; }
+.mini canvas { width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:4px; background:#000; }
+.drop { border:1px dashed var(--line); border-radius:6px; padding:10px 12px; }
+.params { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:4px 12px; }
+.progress { font-size:13px; color:var(--accent); min-height:1.4em; }
+.side > *, .two > * { min-width:0; }
+input[type=file] { max-width:100%; min-width:0; }

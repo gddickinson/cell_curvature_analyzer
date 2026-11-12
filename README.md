@@ -2,8 +2,6 @@
 
 A comprehensive GUI application for analyzing the relationship between cell-membrane curvature and PIEZO1 protein locations from fluorescence microscope recordings.
 
-![Application Screenshot](docs/images/screenshot.png)
-
 ## Features
 
 - **Interactive Visualization**: View original images, binary masks, and analysis overlays side-by-side
@@ -108,6 +106,47 @@ The application classifies cell edge movement into three categories:
 - **Extending**: Cell growth/protrusion (blue in visualizations)
 - **Retracting**: Cell shrinkage/retraction (red in visualizations)
 - **Stable**: Minimal net movement (gray in visualizations)
+
+## Web interface and static site
+
+A browser front end for the core analysis: load a fluorescence image and its binary cell mask (TIFF stacks, including
+LZW/Deflate/PackBits and ImageJ files, or PNG), or the synthetic demo, set the parameters and get the edge overlay
+coloured by curvature, the sampling rectangles, curvature and intensity profiles along the edge, the intensity vs
+curvature regression pooled over frames, edge movement between frames, and CSV/JSON export. Pixel size (µm/px) is read
+from ImageJ TIFFs or entered by hand; without it lengths stay in pixels and the page says so.
+
+![Analyze page on the synthetic demo](docs/img/analyze_demo.png)
+
+**Curvature sign convention** (documented in `modules/edge_analysis.py`, shown on the *Curvature sign* page and pinned by
+tests on a circular mask): **+1 where the edge bulges out of the cell (convex)**, **-1 where it bends into the cell
+(concave) or is straight**. It holds because `find_contours` always walks the edge with the cell on its right.
+
+![Curvature sign page](docs/img/convention.png)
+
+### Run the web app
+```bash
+pip install -r requirements-web.txt
+python run_web.py            # http://127.0.0.1:8208 (local only)
+```
+The local app runs the Python core: `POST /api/analyze` passes the stack to `modules/web/analysis.py::analyze_stack`,
+which uses `modules/edge_analysis.py` (the same functions `CurvatureAnalyzer` delegates to).
+
+### Static site (GitHub Pages)
+`python scripts/build_static.py` writes `site/`; `.github/workflows/pages.yml` publishes it on every push to `main`.
+On the static site the analysis runs in the browser: `modules/web/static/edge_engine.js` and `contour_engine.js` port the
+Python core (including `skimage.measure.find_contours`, `skimage.draw.polygon` and `scipy.stats.linregress`), and nothing
+is uploaded. `node modules/web/static/edge_engine.test.mjs` checks the port against Python results stored in
+`tests/fixtures/edge_fixture.json` (regenerate with `python scripts/make_edge_fixture.py`); agreement is about 1e-14.
+
+The demo data is synthetic (`modules/synthetic_cell.py`, seeded): fluorescence is enriched where the edge is concave by
+construction, so the negative slope it shows is built in. The repository contains no measured recordings. Angular,
+axis-based and x-axis sampling, temporal comparisons and report export remain desktop-only.
+
+### Tests
+```bash
+python -m pytest -q tests                      # desktop core + web API + static build + JS port vs Python
+python scripts/screenshots.py --static "" analyze/demo convention about   # smoke test (Playwright)
+```
 
 ## Contributing
 
