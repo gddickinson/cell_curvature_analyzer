@@ -6,7 +6,8 @@
 - **`main.py`** - Creates PyQt5 `QApplication` and launches `MainWindow` from `modules/cell_curvature_analyzer.py`.
 
 ### Modules Package (`modules/`)
-- **`cell_curvature_analyzer.py`** (4890 lines) - `MainWindow`: the monolithic main GUI window. Contains all tabs, data loading, visualization triggers, and analysis coordination. (NOTE: this file is very large and should be split in the future.)
+- **`cell_curvature_analyzer.py`** - `MainWindow`: construction, toolbar, docks, log tab; its behaviour comes from the mixins in `modules/gui/`.
+- **`gui/`** - `MainWindow` mixins, one concern per file: `tab_visualization.py` (Visualization + Analysis tabs), `tab_analysis.py` (Correlation, Temporal, Movement tabs), `tab_export_settings.py` (Export + Settings tabs), `frame_plots.py` (per-frame curvature / intensity / correlation plots and tables), `correlation_display.py` (Correlation tab dispatch, movement proxy, single-frame correlations), `correlation_pooled.py` (all-frames / by-movement correlations), `correlation_temporal.py` and `correlation_movement_temporal.py` (frame vs previous / reference frame), `navigation.py` (frame navigation, temporal / movement displays), `display.py` (image, overlay, results display), `data_actions.py` (loading stacks, running the analysis), `export_actions.py`, `settings_actions.py` (QSettings), `ml_tab.py` (ML tab; not currently added to the window), `popup_plots.py`, `workers.py` (QThread workers).
 - **`curvature_analysis.py`** (850 lines) - `CurvatureAnalyzer`: stack/frame driver used by the GUI. `process_stack()`, `analyze_frame()`, the angular / axis-based / x-axis samplers; edge detection, equidistant sampling, curvature, normals, intensity, movement and regression delegate to `edge_analysis`.
 - **`edge_analysis.py`** - Qt-free analysis core (also used by the web app): `detect_cell_edge`, `sample_equidistant_points`, `measure_curvature` (sign convention in the module docstring: +1 convex / bulging out of the cell, -1 concave or straight), `calculate_inward_normal`, `measure_intensity`, `analyze_points`, `analyze_frame`, `detect_edge_movement`, `summary_correlation_stats`.
 - **`analysis_defaults.py`** - `DEFAULTS`: the single source of analysis defaults (n_points, depth, width, min_cell_coverage, try_rotation, exclude_endpoints, movement_threshold); read by the widgets, settings, analyzer and web app.
@@ -26,6 +27,7 @@
 - **`analysis.py`** - `analyze_stack()` (stack-level analysis on `edge_analysis`, same statistics as `process_stack`), `clean_params`, base64 `encode`/`decode`.
 - **`static/`** - ES-module front end (no build step): `main.js` (router), `home.js`, `analyze.js` + `analyze_view.js` + `plots.js` (Analyze page), `convention.js` (curvature sign page), `about.js`; `stack_io.js` + `tiff_reader.js` (loading TIFF/PNG stacks); JS ports `contour_engine.js` (find_contours, equidistant points), `edge_engine.js` (curvature, normals, draw.polygon, intensity, movement, stack), `stats_engine.js` (linregress); `edge_engine.test.mjs` (node test vs Python fixture); `static_api.js` (static-site data layer); `core.js`/`style.css` shared web kit.
 - **`run_web.py`** (repo root) - starts the app on 127.0.0.1:8208.
+- **`scripts/desktop_demo_digest.py`** - offscreen digest of everything the desktop app computes and draws on the synthetic demo (pipeline, every GUI view, export); `--compare A B` to check that a refactor changes nothing.
 - **`scripts/build_static.py`**, **`scripts/screenshots.py`**, **`scripts/make_edge_fixture.py`** - static export, Playwright smoke test, Python-vs-JS fixture (`tests/fixtures/`).
 
 ### Standalone Scripts (`standalone/`)
@@ -44,7 +46,7 @@
 - **`test_web.py`** - web API, static build, fixture currency, web vs desktop statistics, node test of the JS port.
 
 ## Key Relationships
-- `main.py` -> `modules/cell_curvature_analyzer.MainWindow`
+- `main.py` -> `modules/cell_curvature_analyzer.MainWindow` (mixins from `modules/gui/`)
 - `MainWindow` uses `CurvatureAnalyzer`, `Visualizer`, `TemporalAnalyzer`, `CorrelationAnalyzer`, `DataExporter`, `FileManager`, `SettingsManager`
 - `CurvatureAnalyzer` drives the analysis; all other modules consume its output. Its per-frame maths lives in `edge_analysis` (shared with `modules/web`)
 - Widgets, `SettingsManager` and `CurvatureAnalyzer` take their defaults from `analysis_defaults.DEFAULTS`
