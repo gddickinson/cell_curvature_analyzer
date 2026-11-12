@@ -13,7 +13,7 @@
 - **`analysis_defaults.py`** - `DEFAULTS`: the single source of analysis defaults (n_points, depth, width, min_cell_coverage, try_rotation, exclude_endpoints, movement_threshold); read by the widgets, settings, analyzer and web app.
 - **`synthetic_cell.py`** - `make_demo_stack()`: seeded synthetic image + mask stack (wound-edge layout, enrichment at concave edge by construction) for the web demo and tests. Not measured data.
 - **`visualization.py`** (774 lines) - `Visualizer`: matplotlib-based plotting for curvature maps, intensity overlays, correlation plots.
-- **`widgets.py`** (966 lines) - Custom PyQt5 widgets used by `MainWindow`.
+- **`widgets/`** - Custom PyQt5 widgets used by `MainWindow` (re-exported by `widgets/__init__.py`): `image_viewer.py` (`ImageViewer`), `overlay_canvas.py` (`OverlayCanvas`), `tables_log.py` (`ResultsTable`, `LogConsole`), `parameter_panel.py` (`ParameterPanel`).
 - **`temporal_analysis.py`** (808 lines) - `TemporalAnalyzer`: frame-to-frame movement analysis and temporal statistics.
 - **`correlation_analysis.py`** - `CorrelationAnalyzer`: curvature-intensity correlation statistics and plots.
 - **`data_export.py`** (1425 lines) - `DataExporter`: exports results to CSV, JSON, TIFF, and figures.
