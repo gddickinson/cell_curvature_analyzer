@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWi
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPixmap, QImage
 import datetime
+from .analysis_defaults import DEFAULTS
 
 class ImageViewer(QWidget):
     """
@@ -663,10 +664,10 @@ class ParameterPanel(QWidget):
 
         # Current parameters - define this BEFORE calling init_ui
         self.parameters = {
-            'n_points': 100,
-            'depth': 20,
-            'width': 5,
-            'min_cell_coverage': 0.8
+            'n_points': DEFAULTS['n_points'],
+            'depth': DEFAULTS['depth'],
+            'width': DEFAULTS['width'],
+            'min_cell_coverage': DEFAULTS['min_cell_coverage']
         }
 
         # Now call init_ui
@@ -683,7 +684,7 @@ class ParameterPanel(QWidget):
         # Number of points
         self.n_points_spin = QSpinBox()
         self.n_points_spin.setRange(10, 500)
-        self.n_points_spin.setValue(100)  # Default value
+        self.n_points_spin.setValue(DEFAULTS["n_points"])  # Default value
         self.n_points_spin.setSingleStep(5)
         self.n_points_spin.valueChanged.connect(self.on_parameter_changed)
         form_layout.addRow("Number of Points:", self.n_points_spin)
@@ -691,21 +692,21 @@ class ParameterPanel(QWidget):
         # Sampling depth
         self.depth_spin = QSpinBox()
         self.depth_spin.setRange(1, 200)
-        self.depth_spin.setValue(20)  # Default value
+        self.depth_spin.setValue(DEFAULTS["depth"])  # Default value
         self.depth_spin.valueChanged.connect(self.on_parameter_changed)
         form_layout.addRow("Sampling Depth:", self.depth_spin)
 
         # Sampling width
         self.width_spin = QSpinBox()
         self.width_spin.setRange(1, 100)
-        self.width_spin.setValue(5)  # Default value
+        self.width_spin.setValue(DEFAULTS["width"])  # Default value
         self.width_spin.valueChanged.connect(self.on_parameter_changed)
         form_layout.addRow("Sampling Width:", self.width_spin)
 
         # Minimum cell coverage
         self.coverage_spin = QDoubleSpinBox()
         self.coverage_spin.setRange(0.1, 1.0)
-        self.coverage_spin.setValue(0.8)  # Default value
+        self.coverage_spin.setValue(DEFAULTS["min_cell_coverage"])  # Default value
         self.coverage_spin.setSingleStep(0.05)
         self.coverage_spin.setDecimals(2)
         self.coverage_spin.valueChanged.connect(self.on_parameter_changed)
@@ -713,13 +714,13 @@ class ParameterPanel(QWidget):
 
         # Try to rotate sample region
         self.try_rotation_cb = QCheckBox("Try rotating rejected sampling regions")
-        self.try_rotation_cb.setChecked(False)  # Default to off
+        self.try_rotation_cb.setChecked(DEFAULTS["try_rotation"])  # Default to off
         self.try_rotation_cb.toggled.connect(self.on_parameter_changed)
         form_layout.addRow("", self.try_rotation_cb)
 
         # Exclude endpoints
         self.exclude_endpoints_cb = QCheckBox("Exclude first and last edge points")
-        self.exclude_endpoints_cb.setChecked(False)  # Default to off
+        self.exclude_endpoints_cb.setChecked(DEFAULTS["exclude_endpoints"])  # Default to off
         self.exclude_endpoints_cb.toggled.connect(self.on_parameter_changed)
         form_layout.addRow("", self.exclude_endpoints_cb)
 
@@ -784,7 +785,7 @@ class ParameterPanel(QWidget):
             'temporal_mode': self.temporal_mode_combo.currentText(),
             'reference_frame': self.reference_frame_spin.value(),
             'random_mode': self.random_mode_combo.currentText(),
-            'angularr_distribution': self.angular_distribution_cb.isChecked(),
+            'angular_distribution': self.angular_distribution_cb.isChecked(),
             'axis_based_distribution': self.axis_based_distribution_cb.isChecked(),
             'x_axis_distribution': self.x_axis_distribution_cb.isChecked()
         }
@@ -884,13 +885,13 @@ class ParameterPanel(QWidget):
     def reset_parameters(self):
         """Reset parameters to defaults"""
         # Set default values
-        self.n_points_spin.setValue(100)
-        self.depth_spin.setValue(20)
-        self.width_spin.setValue(5)
-        self.coverage_spin.setValue(0.8)
+        self.n_points_spin.setValue(DEFAULTS["n_points"])
+        self.depth_spin.setValue(DEFAULTS["depth"])
+        self.width_spin.setValue(DEFAULTS["width"])
+        self.coverage_spin.setValue(DEFAULTS["min_cell_coverage"])
         self.temporal_mode_combo.setCurrentIndex(0)  # Current Frame
-        self.try_rotation_cb.setChecked(False)  # Reset to default (off)
-        self.exclude_endpoints_cb.setChecked(False)  # Reset to default (off)
+        self.try_rotation_cb.setChecked(DEFAULTS["try_rotation"])  # Reset to default (off)
+        self.exclude_endpoints_cb.setChecked(DEFAULTS["exclude_endpoints"])  # Reset to default (off)
         self.angular_distribution_cb.setChecked(False)  # Reset to default (off)
         self.axis_based_distribution_cb.setChecked(False)  # Reset to default (off)
         self.x_axis_distribution_cb.setChecked(False)  # Reset to default (off)

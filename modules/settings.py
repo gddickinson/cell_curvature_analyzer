@@ -1,4 +1,5 @@
 from PyQt5.QtCore import QSettings, QSize, QPoint
+from .analysis_defaults import DEFAULTS
 
 
 class SettingsManager:
@@ -110,10 +111,10 @@ class SettingsManager:
             Dictionary of analysis parameters
         """
         parameters = {
-            "n_points": self.settings.value("analysis/n_points", 100, type=int),
-            "depth": self.settings.value("analysis/depth", 20, type=int),
-            "width": self.settings.value("analysis/width", 5, type=int),
-            "min_cell_coverage": self.settings.value("analysis/min_cell_coverage", 0.8, type=float)
+            "n_points": self.settings.value("analysis/n_points", DEFAULTS["n_points"], type=int),
+            "depth": self.settings.value("analysis/depth", DEFAULTS["depth"], type=int),
+            "width": self.settings.value("analysis/width", DEFAULTS["width"], type=int),
+            "min_cell_coverage": self.settings.value("analysis/min_cell_coverage", DEFAULTS["min_cell_coverage"], type=float)
         }
         
         return parameters

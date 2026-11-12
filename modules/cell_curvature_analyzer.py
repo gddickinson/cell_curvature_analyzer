@@ -29,6 +29,7 @@ from PyQt5.QtGui import QIcon, QFont, QPixmap
 
 # Import custom modules
 from modules.curvature_analysis import CurvatureAnalyzer
+from modules.analysis_defaults import DEFAULTS
 from modules.file_io import FileManager
 from modules.visualization import VisualizationManager
 from modules.data_export import ExportManager
@@ -1042,7 +1043,7 @@ class MainWindow(QMainWindow):
         # Number of points
         self.n_points_spin = QSpinBox()
         self.n_points_spin.setRange(10, 500)
-        self.n_points_spin.setValue(100)
+        self.n_points_spin.setValue(DEFAULTS["n_points"])
         self.n_points_spin.setSingleStep(5)
         analysis_layout.addWidget(QLabel("Number of Points:"), 0, 0)
         analysis_layout.addWidget(self.n_points_spin, 0, 1)
@@ -1050,21 +1051,21 @@ class MainWindow(QMainWindow):
         # Sampling depth
         self.depth_spin = QSpinBox()
         self.depth_spin.setRange(1, 200)
-        self.depth_spin.setValue(20)
+        self.depth_spin.setValue(DEFAULTS["depth"])
         analysis_layout.addWidget(QLabel("Sampling Depth:"), 1, 0)
         analysis_layout.addWidget(self.depth_spin, 1, 1)
 
         # Sampling width
         self.width_spin = QSpinBox()
         self.width_spin.setRange(1, 100)
-        self.width_spin.setValue(5)
+        self.width_spin.setValue(DEFAULTS["width"])
         analysis_layout.addWidget(QLabel("Sampling Width:"), 2, 0)
         analysis_layout.addWidget(self.width_spin, 2, 1)
 
         # Minimum cell coverage
         self.min_coverage_spin = QDoubleSpinBox()
         self.min_coverage_spin.setRange(0.1, 1.0)
-        self.min_coverage_spin.setValue(0.8)
+        self.min_coverage_spin.setValue(DEFAULTS["min_cell_coverage"])
         self.min_coverage_spin.setSingleStep(0.05)
         analysis_layout.addWidget(QLabel("Minimum Cell Coverage:"), 3, 0)
         analysis_layout.addWidget(self.min_coverage_spin, 3, 1)
@@ -3508,10 +3509,10 @@ class MainWindow(QMainWindow):
     def reset_settings(self):
         """Reset settings to defaults"""
         # Analysis parameters
-        self.n_points_spin.setValue(100)
-        self.depth_spin.setValue(20)
-        self.width_spin.setValue(5)
-        self.min_coverage_spin.setValue(0.8)
+        self.n_points_spin.setValue(DEFAULTS["n_points"])
+        self.depth_spin.setValue(DEFAULTS["depth"])
+        self.width_spin.setValue(DEFAULTS["width"])
+        self.min_coverage_spin.setValue(DEFAULTS["min_cell_coverage"])
 
         # Visualization settings
         self.curvature_cmap_combo.setCurrentIndex(0)

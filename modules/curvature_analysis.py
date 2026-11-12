@@ -9,6 +9,9 @@ import datetime
 import json
 import tifffile
 
+from . import edge_analysis
+from .analysis_defaults import DEFAULTS
+
 class CurvatureAnalyzer:
     """
     Class for analyzing cell curvature, intensity, and edge movement.
@@ -19,9 +22,10 @@ class CurvatureAnalyzer:
         """Initialize CurvatureAnalyzer"""
         pass
 
-    def process_stack(self, image_path, mask_path, output_dir, n_points=100,
-                     depth=20, width=5, min_cell_coverage=0.8, try_rotation=False,
-                     exclude_endpoints=False, angular_distribution=False,
+    def process_stack(self, image_path, mask_path, output_dir, n_points=DEFAULTS["n_points"],
+                     depth=DEFAULTS["depth"], width=DEFAULTS["width"],
+                     min_cell_coverage=DEFAULTS["min_cell_coverage"], try_rotation=DEFAULTS["try_rotation"],
+                     exclude_endpoints=DEFAULTS["exclude_endpoints"], angular_distribution=False,
                      axis_based_distribution=False, x_axis_distribution=False,
                      progress_callback=None):
         """
@@ -238,8 +242,10 @@ class CurvatureAnalyzer:
 
         return results
 
-    def analyze_frame(self, image, mask, n_points=100, depth=20, width=5, min_cell_coverage=0.8,
-                     try_rotation=False, exclude_endpoints=False, angular_distribution=False,
+    def analyze_frame(self, image, mask, n_points=DEFAULTS["n_points"], depth=DEFAULTS["depth"],
+                     width=DEFAULTS["width"], min_cell_coverage=DEFAULTS["min_cell_coverage"],
+                     try_rotation=DEFAULTS["try_rotation"], exclude_endpoints=DEFAULTS["exclude_endpoints"],
+                     angular_distribution=False,
                      axis_based_distribution=False, x_axis_distribution=False):
         """
         Analyze a single frame
@@ -404,78 +410,12 @@ class CurvatureAnalyzer:
         return images, masks
 
     def detect_cell_edge(self, mask):
-        """
-        Detect the cell edge from a binary mask.
+        """Longest 0.5-level contour of a binary mask (see edge_analysis.detect_cell_edge)."""
+        return edge_analysis.detect_cell_edge(mask)
 
-        Parameters:
-        -----------
-        mask : ndarray
-            Binary mask
-
-        Returns:
-        --------
-        contour : ndarray
-            Cell contour points
-        """
-        # Get contours from the binary mask
-        contours = measure.find_contours(mask, 0.5)
-
-        # Usually the longest contour corresponds to the cell edge
-        if len(contours) > 0:
-            contour = max(contours, key=len)
-            return contour
-        else:
-            return np.array([])
-
-    def sample_equidistant_points(self, contour, n_points=100):
-        """
-        Sample equidistant points along a contour.
-
-        Parameters:
-        -----------
-        contour : ndarray
-            Cell contour
-        n_points : int
-            Number of points to sample
-
-        Returns:
-        --------
-        sampled_points : ndarray
-            Array of equidistant points
-        """
-        # Calculate the total contour length
-        contour_length = 0
-        for i in range(len(contour) - 1):
-            contour_length += np.linalg.norm(contour[i+1] - contour[i])
-
-        # Distance between equidistant points
-        step_size = contour_length / n_points
-
-        # Sample equidistant points
-        sampled_points = []
-        current_length = 0
-
-        i = 0
-        sampled_points.append(contour[0])
-
-        while len(sampled_points) < n_points and i < len(contour) - 1:
-            # Distance to the next point on the contour
-            dist = np.linalg.norm(contour[i+1] - contour[i])
-
-            if current_length + dist >= step_size:
-                # Interpolate to find the next equidistant point
-                t = (step_size - current_length) / dist
-                next_point = contour[i] + t * (contour[i+1] - contour[i])
-                sampled_points.append(next_point)
-                current_length = 0
-                # Do not increment i, stay on the same segment
-            else:
-                # Move to the next segment
-                current_length += dist
-                i += 1
-
-        # If we couldn't sample enough points, just return what we have
-        return np.array(sampled_points)
+    def sample_equidistant_points(self, contour, n_points=DEFAULTS["n_points"]):
+        """Equidistant points along a contour (see edge_analysis.sample_equidistant_points)."""
+        return edge_analysis.sample_equidistant_points(contour, n_points)
 
 
     def sample_angular_points(self, contour, n_points=100):
@@ -763,455 +703,33 @@ class CurvatureAnalyzer:
         return sampled_points
 
     def measure_curvature(self, points):
-        """
-        Measure curvature at each point along the contour.
-
-        Parameters:
-        -----------
-        points : ndarray
-            Array of contour points
-
-        Returns:
-        --------
-        (sign_curvatures, magnitude_curvatures, normalized_curvatures) : tuple
-            Tuple of curvature measurements
-        """
-        n_points = len(points)
-        sign_curvatures = np.zeros(n_points)
-        magnitude_curvatures = np.zeros(n_points)
-
-        for i in range(n_points):
-            # Get adjacent points (with wrapping for closed contours)
-            left_idx = (i - 1) % n_points
-            right_idx = (i + 1) % n_points
-
-            p = points[i]
-            p_left = points[left_idx]
-            p_right = points[right_idx]
-
-            # Vector from left to right point
-            v = p_right - p_left
-            v_length = np.linalg.norm(v)
-
-            # Vector from left to current point
-            w = p - p_left
-
-            # Cross product to determine if point is left or right of the line
-            cross_product = v[0] * w[1] - v[1] * w[0]
-
-            # Normalized cross product as measure of curvature magnitude
-            if v_length > 0:
-                magnitude = abs(cross_product) / (v_length * v_length)
-            else:
-                magnitude = 0
-
-            magnitude_curvatures[i] = magnitude
-
-            # Sign of curvature
-            if cross_product > 0:
-                sign_curvatures[i] = 1  # Positive curvature (outside, wound side)
-            else:
-                sign_curvatures[i] = -1  # Negative curvature (inside, monolayer side)
-
-        # Create normalized curvatures (preserve sign but normalize magnitude to [0, 1])
-        max_magnitude = np.max(magnitude_curvatures)
-        if max_magnitude > 0:
-            normalized_curvatures = sign_curvatures * (magnitude_curvatures / max_magnitude)
-            #normalized_curvatures = sign_curvatures * (magnitude_curvatures) #no normalization
-        else:
-            normalized_curvatures = sign_curvatures * 0
-
-        return sign_curvatures, magnitude_curvatures, normalized_curvatures
+        """(sign, magnitude, normalized) curvature; sign convention documented in edge_analysis."""
+        return edge_analysis.measure_curvature(points)
 
     def calculate_inward_normal(self, points, mask):
+        """Unit normals pointing into the cell (see edge_analysis.calculate_inward_normal)."""
+        return edge_analysis.calculate_inward_normal(points, mask)
+
+    def measure_intensity(self, image, mask, points, normals, depth=DEFAULTS["depth"], width=DEFAULTS["width"],
+                          min_cell_coverage=DEFAULTS["min_cell_coverage"], try_rotation=DEFAULTS["try_rotation"],
+                          exclude_endpoints=DEFAULTS["exclude_endpoints"]):
+        """Mean intensity in rectangles reaching into the cell (see edge_analysis.measure_intensity).
+
+        Returns (intensities, sampling_regions, valid_points, recovered_by_rotation).
         """
-        Calculate the inward normal vector at each point.
-
-        Parameters:
-        -----------
-        points : ndarray
-            Array of contour points
-        mask : ndarray
-            Binary mask
-
-        Returns:
-        --------
-        normals : ndarray
-            Array of inward normal vectors
-        """
-        n_points = len(points)
-        normals = np.zeros((n_points, 2))
-        mask_shape = mask.shape
-
-        for i in range(n_points):
-            # Get adjacent points (with wrapping for closed contours)
-            left_idx = (i - 1) % n_points
-            right_idx = (i + 1) % n_points
-
-            p = points[i]
-            p_left = points[left_idx]
-            p_right = points[right_idx]
-
-            # Calculate tangent vector
-            tangent = p_right - p_left
-            tangent_norm = np.linalg.norm(tangent)
-
-            # Check if tangent has non-zero length
-            if tangent_norm > 1e-10:  # Only normalize if length is non-zero
-                tangent = tangent / tangent_norm
-            else:
-                # If tangent is too small, try using more distant points
-                print(f"DEBUG: Tiny tangent at point {i} (norm={tangent_norm}). Trying wider tangent.")
-                left_idx2 = (i - 2) % n_points
-                right_idx2 = (i + 2) % n_points
-                p_left2 = points[left_idx2]
-                p_right2 = points[right_idx2]
-                tangent = p_right2 - p_left2
-                tangent_norm = np.linalg.norm(tangent)
-
-                if tangent_norm > 1e-10:
-                    tangent = tangent / tangent_norm
-                else:
-                    # If still too small, use a default tangent along x-axis
-                    print(f"DEBUG: Still tiny tangent at point {i}. Using default.")
-                    tangent = np.array([1.0, 0.0])
-
-            # Calculate normal vectors (both possible directions)
-            normal1 = np.array([-tangent[1], tangent[0]])
-            normal2 = -normal1
-
-            # Check which normal points into the cell
-            test_point1 = p + 3 * normal1
-            test_point2 = p + 3 * normal2
-
-            # Ensure test points are within image bounds
-            test_point1 = np.clip(test_point1, [0, 0], [mask_shape[0]-1, mask_shape[1]-1])
-            test_point2 = np.clip(test_point2, [0, 0], [mask_shape[0]-1, mask_shape[1]-1])
-
-            # Convert to integers explicitly (avoid NaN issues)
-            try:
-                tp1_y, tp1_x = int(round(test_point1[0])), int(round(test_point1[1]))
-                tp2_y, tp2_x = int(round(test_point2[0])), int(round(test_point2[1]))
-
-                # Check mask values
-                val1 = mask[tp1_y, tp1_x]
-                val2 = mask[tp2_y, tp2_x]
-
-                # Choose the normal that points into the cell (value 1 in mask)
-                if val1 == 1:
-                    normals[i] = normal1
-                elif val2 == 1:
-                    normals[i] = normal2
-                else:
-                    # If neither point is inside the cell, use the curvature to guess
-                    normals[i] = normal2  # Default
-
-            except IndexError as e:
-                print(f"DEBUG: Index error at point {i} with test points {test_point1}, {test_point2}")
-                # Use a reasonable default normal
-                normals[i] = normal1
-            except Exception as e:
-                print(f"DEBUG: Error at point {i}: {e}")
-                normals[i] = normal1  # Default
-
-        return normals
-
-    def measure_intensity(self, image, mask, points, normals, depth=20, width=5, min_cell_coverage=0.8,
-                          try_rotation=False, exclude_endpoints=False):
-        """
-        Measure mean intensity within rectangular regions extending from each point.
-
-        Parameters:
-        -----------
-        image : ndarray
-            The intensity image
-        mask : ndarray
-            Binary mask where 1 = cell, 0 = background
-        points : ndarray
-            Equidistant points along the contour
-        normals : ndarray
-            Normal vectors pointing into the cell at each point
-        depth : int
-            Length of the rectangle (how far into the cell)
-        width : int
-            Width of the rectangle
-        min_cell_coverage : float
-            Minimum fraction of the rectangle that must be inside the cell
-        try_rotation : bool
-            Whether to try rotating rejected sampling regions by 180° and recheck coverage
-        exclude_endpoints : bool
-            Whether to exclude the first and last points in the analysis
-
-        Returns:
-        --------
-        (intensities, sampling_regions, valid_points, recovered_by_rotation) : tuple
-            Tuple of intensity measurements, sampling regions, validity flags, and rotation recovery flags
-        """
-        n_points = len(points)
-        intensities = np.full(n_points, np.nan)  # Initialize with NaN
-        sampling_regions = []
-        valid_points = np.zeros(n_points, dtype=bool)
-        recovered_by_rotation = np.zeros(n_points, dtype=bool)
-
-        # Add counters for debugging
-        total_regions = 0
-        initially_valid_regions = 0
-        regions_tried_rotation = 0
-        regions_recovered_by_rotation = 0
-        excluded_endpoints = 0
-
-        image_shape = image.shape
-
-        print(f"DEBUG: Starting intensity measurement with try_rotation={try_rotation}, exclude_endpoints={exclude_endpoints}")
-
-        for i in range(n_points):
-            # Check if this is an endpoint that should be excluded
-            if exclude_endpoints and (i == 0 or i == n_points - 1):
-                print(f"DEBUG: Point {i}: Excluded as endpoint")
-                excluded_endpoints += 1
-                # Add empty region for visualization consistency
-                sampling_regions.append(np.zeros((4, 2)))
-                continue
-
-            total_regions += 1
-            p = points[i]
-            normal = normals[i]
-
-            # Calculate end point of the vector
-            end_point = p + depth * normal
-
-            # Calculate perpendicular direction (for width)
-            perp = np.array([-normal[1], normal[0]])
-
-            # Calculate corner points of the rectangle
-            corner1 = p + width/2 * perp
-            corner2 = p - width/2 * perp
-            corner3 = end_point - width/2 * perp
-            corner4 = end_point + width/2 * perp
-
-            # Create a polygon for the rectangle
-            vertices = np.array([corner1, corner4, corner3, corner2])
-
-            # Get all pixels within the polygon
-            rr, cc = draw.polygon(vertices[:, 0], vertices[:, 1], image_shape)
-
-            # Check if any pixels are within bounds
-            valid_pixels = (rr >= 0) & (rr < image_shape[0]) & (cc >= 0) & (cc < image_shape[1])
-            if np.any(valid_pixels):
-                rr = rr[valid_pixels]
-                cc = cc[valid_pixels]
-
-                # Check cell coverage
-                total_pixels = len(rr)
-                cell_pixels = np.sum(mask[rr, cc])
-                cell_coverage = cell_pixels / total_pixels
-
-                # Debug log the original coverage
-                if i % 10 == 0:  # Only print every 10th point to avoid too many logs
-                    print(f"DEBUG: Point {i}: Initial coverage: {cell_coverage:.3f} (min required: {min_cell_coverage})")
-
-                # Only include points with sufficient cell coverage
-                if cell_coverage >= min_cell_coverage:
-                    # Calculate mean intensity
-                    intensities[i] = np.mean(image[rr, cc])
-                    valid_points[i] = True
-                    initially_valid_regions += 1
-
-                # If coverage is insufficient and rotation is enabled, try rotating the region
-                elif try_rotation:
-                    regions_tried_rotation += 1
-                    # Print debug info
-                    print(f"DEBUG: Point {i}: Trying rotation. Original coverage: {cell_coverage:.3f}")
-
-                    # Rotate normal vector 180 degrees
-                    rotated_normal = -normal
-
-                    # Recalculate end point with rotated normal
-                    rotated_end_point = p + depth * rotated_normal
-
-                    # Calculate corner points of the rotated rectangle
-                    rotated_corner1 = p + width/2 * perp
-                    rotated_corner2 = p - width/2 * perp
-                    rotated_corner3 = rotated_end_point - width/2 * perp
-                    rotated_corner4 = rotated_end_point + width/2 * perp
-
-                    # Create a polygon for the rotated rectangle
-                    rotated_vertices = np.array([rotated_corner1, rotated_corner4, rotated_corner3, rotated_corner2])
-
-                    # Get all pixels within the rotated polygon
-                    rotated_rr, rotated_cc = draw.polygon(rotated_vertices[:, 0], rotated_vertices[:, 1], image_shape)
-
-                    # Check if any pixels are within bounds
-                    rotated_valid_pixels = (rotated_rr >= 0) & (rotated_rr < image_shape[0]) & (rotated_cc >= 0) & (rotated_cc < image_shape[1])
-                    if np.any(rotated_valid_pixels):
-                        rotated_rr = rotated_rr[rotated_valid_pixels]
-                        rotated_cc = rotated_cc[rotated_valid_pixels]
-
-                        # Check cell coverage of rotated region
-                        rotated_total_pixels = len(rotated_rr)
-                        rotated_cell_pixels = np.sum(mask[rotated_rr, rotated_cc])
-                        rotated_cell_coverage = rotated_cell_pixels / rotated_total_pixels
-
-                        # Debug log the rotated coverage
-                        print(f"DEBUG: Point {i}: After rotation coverage: {rotated_cell_coverage:.3f}")
-
-                        # If rotated region has sufficient coverage, use it
-                        if rotated_cell_coverage >= min_cell_coverage:
-                            intensities[i] = np.mean(image[rotated_rr, rotated_cc])
-                            valid_points[i] = True
-                            recovered_by_rotation[i] = True  # Mark as recovered by rotation
-                            regions_recovered_by_rotation += 1
-                            print(f"DEBUG: Point {i}: Successfully recovered by rotation!")
-
-                            # Use the rotated vertices for visualization
-                            vertices = rotated_vertices
-
-            # Save sampling region for visualization (even if not valid)
-            sampling_regions.append(vertices)
-
-        # Print summary stats
-        print(f"DEBUG: Intensity measurement summary:")
-        print(f"DEBUG: Total regions: {total_regions}")
-        if exclude_endpoints:
-            print(f"DEBUG: Excluded endpoints: {excluded_endpoints}")
-        print(f"DEBUG: Initially valid regions: {initially_valid_regions} ({initially_valid_regions/total_regions*100:.1f}%)")
-        if try_rotation:
-            print(f"DEBUG: Regions that needed rotation: {regions_tried_rotation}")
-
-            # Check to avoid division by zero
-            if regions_tried_rotation > 0:
-                recovery_percentage = regions_recovered_by_rotation/regions_tried_rotation*100
-                print(f"DEBUG: Regions recovered by rotation: {regions_recovered_by_rotation} ({recovery_percentage:.1f}% of tried)")
-            else:
-                print(f"DEBUG: Regions recovered by rotation: {regions_recovered_by_rotation} (0.0% - no regions needed rotation)")
-
-            print(f"DEBUG: Total valid regions after rotation: {initially_valid_regions + regions_recovered_by_rotation} ({(initially_valid_regions + regions_recovered_by_rotation)/total_regions*100:.1f}%)")
-
-        return intensities, sampling_regions, valid_points, recovered_by_rotation
+        return edge_analysis.measure_intensity(image, mask, points, normals, depth, width, min_cell_coverage,
+                                               try_rotation, exclude_endpoints)
 
     def detect_edge_movement(self, current_contour, previous_contour, current_mask, previous_mask):
+        """(normalised score, movement type, movement map) from two masks; the contours are not used.
+
+        See edge_analysis.detect_edge_movement.
         """
-        Analyze the movement of cell edge between two consecutive frames.
-
-        Parameters:
-        -----------
-        current_contour : ndarray
-            Contour points from current frame
-        previous_contour : ndarray
-            Contour points from previous frame
-        current_mask : ndarray
-            Binary mask from current frame
-        previous_mask : ndarray
-            Binary mask from previous frame
-
-        Returns:
-        --------
-        (movement_score, movement_type, movement_map) : tuple
-            Movement score, type and movement map
-        """
-        # Create a movement map (2D array with same shape as the masks)
-        movement_map = np.zeros_like(current_mask, dtype=float)
-
-        # Calculate the difference between current and previous masks
-        diff_mask = current_mask.astype(int) - previous_mask.astype(int)
-
-        # Identify extension and retraction regions
-        extension_regions = (diff_mask == 1)
-        retraction_regions = (diff_mask == -1)
-
-        # Set values in the movement map
-        movement_map[extension_regions] = 1.0  # Extension
-        movement_map[retraction_regions] = -1.0  # Retraction
-
-        # Count pixels in extension and retraction regions
-        extension_pixels = np.sum(extension_regions)
-        retraction_pixels = np.sum(retraction_regions)
-
-        # Calculate net movement score (positive for extension, negative for retraction)
-        movement_score = extension_pixels - retraction_pixels
-
-        # Normalize by the perimeter length (approximated by total changed pixels)
-        total_changed_pixels = extension_pixels + retraction_pixels
-        if total_changed_pixels > 0:
-            normalized_score = movement_score / total_changed_pixels
-        else:
-            normalized_score = 0.0
-
-        # Classify movement type with a small threshold for stability
-        if normalized_score > 0.1:
-            movement_type = 'extending'
-        elif normalized_score < -0.1:
-            movement_type = 'retracting'
-        else:
-            movement_type = 'stable'
-
-        return normalized_score, movement_type, movement_map
+        return edge_analysis.detect_edge_movement(current_mask, previous_mask)
 
     def calculate_summary_correlation_stats(self, all_curvatures, all_intensities, all_valid_points):
-        """
-        Calculate summary correlation statistics for all valid data points.
-
-        Parameters:
-        -----------
-        all_curvatures : list
-            List of curvature arrays
-        all_intensities : list
-            List of intensity arrays
-        all_valid_points : list
-            List of validity masks
-
-        Returns:
-        --------
-        stats : dict
-            Dictionary of correlation statistics
-        """
-        # Combine data from all frames
-        combined_curvatures = []
-        combined_intensities = []
-
-        for frame_idx in range(len(all_curvatures)):
-            curvatures = all_curvatures[frame_idx]
-            intensities = all_intensities[frame_idx]
-            valid_points = all_valid_points[frame_idx]
-
-            # Filter out invalid points
-            valid_curvatures = curvatures[valid_points]
-            valid_intensities = intensities[valid_points]
-
-            combined_curvatures.extend(valid_curvatures)
-            combined_intensities.extend(valid_intensities)
-
-        # Convert to numpy arrays
-        combined_curvatures = np.array(combined_curvatures)
-        combined_intensities = np.array(combined_intensities)
-
-        # Skip if no valid points
-        if len(combined_curvatures) == 0:
-            return {
-                "r_squared": None,
-                "p_value": None,
-                "sample_size": 0
-            }
-
-        # Calculate correlation statistics
-        if len(combined_curvatures) > 1:
-            slope, intercept, r_value, p_value, std_err = stats.linregress(
-                combined_curvatures, combined_intensities)
-
-            return {
-                "r_squared": float(r_value**2),
-                "p_value": float(p_value),
-                "sample_size": int(len(combined_curvatures)),
-                "slope": float(slope),
-                "intercept": float(intercept),
-                "standard_error": float(std_err)
-            }
-        else:
-            return {
-                "r_squared": None,
-                "p_value": None,
-                "sample_size": int(len(combined_curvatures))
-            }
+        """Pooled regression of intensity on curvature (see edge_analysis.summary_correlation_stats)."""
+        return edge_analysis.summary_correlation_stats(all_curvatures, all_intensities, all_valid_points)
 
 
     def debug_visualize_sampling_methods(self, contour, n_points=100):
