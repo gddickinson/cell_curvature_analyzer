@@ -4,3 +4,5 @@
 /tests/__pycache__
 /standalone/forJinghao/modular/utils/__pycache__
 /modules/__pycache__
+.DS_Store
+__pycache__/
