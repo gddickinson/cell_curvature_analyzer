@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "cell-curvature-analyzer"
@@ -21,6 +21,9 @@ dependencies = [
 
 [project.scripts]
 cell-curvature-analyzer = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 include = ["modules*"]

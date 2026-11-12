@@ -21,7 +21,8 @@ from PyQt5.QtCore import Qt
 # Import main application window
 from modules.cell_curvature_analyzer import MainWindow
 
-if __name__ == "__main__":
+def main():
+    """Start the desktop application (also the `cell-curvature-analyzer` console script)."""
     # Create application
     app = QApplication(sys.argv)
     app.setApplicationName("Cell Curvature Analyzer")
@@ -35,3 +36,7 @@ if __name__ == "__main__":
 
     # Run application
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()

@@ -29,8 +29,8 @@ A comprehensive GUI application for analyzing the relationship between cell-memb
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/cell-curvature-analyzer.git
-cd cell-curvature-analyzer
+git clone https://github.com/gddickinson/cell_curvature_analyzer.git
+cd cell_curvature_analyzer
 
 # Create and activate a virtual environment (optional but recommended)
 python -m venv venv
@@ -38,12 +38,6 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install the package
 pip install -e .
-```
-
-### Install from PyPI
-
-```bash
-pip install cell-curvature-analyzer
 ```
 
 ## Usage
@@ -55,7 +49,7 @@ pip install cell-curvature-analyzer
 cell-curvature-analyzer
 
 # Or run directly from the source directory
-python cell_curvature_analyzer.py
+python main.py
 ```
 
 ### Loading Data
