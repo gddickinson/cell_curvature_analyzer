@@ -4,7 +4,9 @@ Cases run modules.web.analysis.analyze_stack (i.e. modules.edge_analysis) on: tw
 a disc, a disc with a notch, random blobs (several contours and holes), an open wound edge over three frames
 with an empty frame, a lattice-aligned square and a one-pixel cell, with different parameters. It also stores
 raw skimage.measure.find_contours output on random binary arrays, skimage.draw.polygon on random and
-lattice-aligned rectangles, and scipy.stats.linregress on random data.
+lattice-aligned rectangles, scipy.stats.linregress on random data, and modules.edge_curvature (point spacing and
+smoothed curvature) on random contours. Stack cases cover the default curvature options, the legacy options
+(point_spacing "legacy", smoothing 0, threshold 0), the dead-band and open edges.
 
 Run: python scripts/make_edge_fixture.py      (checked by tests/test_web.py::test_fixture_is_current)
 """
@@ -58,6 +60,36 @@ def stack_cases(rng):
     one = np.zeros((10, 10), np.uint8)
     one[4, 5] = 1
     yield "one_pixel", np.ones((1, 10, 10)), one[None], {"n_points": 5, "depth": 2, "width": 1}
+    r2 = np.random.default_rng(11)  # separate stream: the earlier fixture data stay as they were
+    legacy = {"point_spacing": "legacy", "smoothing_px": 0.0, "straight_threshold": 0.0}
+    yield "disc_legacy", (r2.random(d.shape) * 200 + 300.0 * d.astype(float))[None], d[None], \
+        {"n_points": 30, "depth": 8, "width": 4, **legacy}
+    yield "demo_legacy", im[:2], m[:2], legacy
+    yield "notch_smooth_deadband", (r2.random(notch.shape) * 500)[None], notch[None], \
+        {"n_points": 45, "smoothing_px": 3.0, "straight_threshold": 0.01}
+    yield "wound_smooth_open", wim, np.stack(wound), {"n_points": 40, "smoothing_px": 4.5, "straight_threshold": 0.005}
+    yield "blobs_three_point_deadband", (r2.random(blobs.shape) * 1000)[None], blobs[None], \
+        {"n_points": 50, "smoothing_px": 0.0, "straight_threshold": 0.02}
+    yield "square_deadband", (np.arange(1600).reshape(40, 40) % 97)[None].astype(float), sq[None], \
+        {"n_points": 16, "depth": 6, "width": 4, "min_cell_coverage": 0.5, "straight_threshold": 0.01}
+
+
+def curvature_cases(rng):
+    """Raw edge_curvature output on contours of random blobs: both spacings, several smoothing scales."""
+    from modules import edge_curvature as C
+    out = []
+    for k in range(4):
+        a = (ndimage.gaussian_filter(rng.random((40, 50)), 2.5) > 0.5).astype(np.uint8)
+        for contour in measure.find_contours(a, 0.5)[:3]:
+            for spacing in ("equal", "legacy"):
+                n = int(rng.integers(5, 40))
+                pts, s = C.sample_edge_points(contour, n, spacing)
+                case = {"contour": contour.tolist(), "n": n, "spacing": spacing, "points": pts.tolist(),
+                        "s": s.tolist(), "closed": C.is_closed(contour), "kappa": {}}
+                for sigma in (0.7, 2.0, 5.0, 12.0):
+                    case["kappa"][str(sigma)] = C.smoothed_curvature(contour, s, sigma).tolist()
+                out.append(case)
+    return out
 
 
 def write_tiffs(rng):
@@ -125,8 +157,9 @@ def main():
         regs.append({"x": x.tolist(), "y": y.tolist(), "slope": res.slope, "intercept": res.intercept,
                      "r": res.rvalue, "p": res.pvalue, "stderr": res.stderr})
     OUT.parent.mkdir(parents=True, exist_ok=True)
+    tiffs = write_tiffs(rng)
     OUT.write_text(json.dumps({"cases": cases, "contours": contours, "polygons": polys, "linregress": regs,
-                               "tiffs": write_tiffs(rng)}))
+                               "tiffs": tiffs, "curvature": curvature_cases(np.random.default_rng(12))}))
     print(f"wrote {OUT} ({OUT.stat().st_size / 1e3:.0f} kB): {len(cases)} stack cases, {len(contours)} contour, "
           f"{len(polys)} polygon, {len(regs)} regression cases")
 

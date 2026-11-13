@@ -6,23 +6,16 @@ and the browser port (modules/web/static/edge_engine.js) is tested against them.
 
 Coordinates are (row, col) pixel centres, as returned by skimage.measure.find_contours.
 
-Curvature sign convention (pinned by tests/test_edge_analysis.py on a circular mask):
-  find_contours walks the edge with the cell on its right-hand side (clockwise round a cell as seen on screen,
-  y downwards). For each sample point p with neighbours p_left (previous) and p_right (next), the cross product
-  (p_right - p_left) x (p - p_left), taken in (row, col), is positive where the edge bulges OUT of the cell
-  (convex, e.g. a protrusion into a wound) and negative where it bends INTO the cell (concave).
-  sign = +1 if cross > 0 else -1 (a perfectly straight run, cross == 0, is therefore -1).
-  magnitude = |cross| / |p_right - p_left|^2, i.e. the point's distance from the chord divided by the chord
-  length; dimensionless (scale-free), about kappa * spacing / 4 for a smooth edge, where spacing is the distance
-  between sample points. normalized = sign * magnitude / max(magnitude) per frame, in [-1, 1].
-  Neighbours wrap round (closed contour); for an open, border-touching edge the first and last points pair up
-  across the image, so their curvature is not meaningful (exclude_endpoints only affects intensity sampling).
+Point sampling, open/closed edges and curvature (options point_spacing, smoothing_px, straight_threshold, and
+the sign convention: +1 convex / bulging out of the cell, -1 concave / bending into it, 0 straight) are documented
+in edge_curvature.py, which also holds the code.
 """
 import numpy as np
 from scipy import stats
 from skimage import draw, measure
 
 from .analysis_defaults import DEFAULTS
+from .edge_curvature import arc_positions, edge_curvature, is_closed, sample_edge_points, three_point_curvature
 
 
 def detect_cell_edge(mask):
@@ -33,62 +26,36 @@ def detect_cell_edge(mask):
     return np.array([])
 
 
-def sample_equidistant_points(contour, n_points=None):
-    """Points every (contour length / n_points) along the contour, starting at contour[0]."""
-    n_points = DEFAULTS["n_points"] if n_points is None else n_points
-    contour_length = 0
-    for i in range(len(contour) - 1):
-        contour_length += np.linalg.norm(contour[i + 1] - contour[i])
-    step_size = contour_length / n_points
-    sampled_points = [contour[0]]
-    current_length = 0
-    i = 0
-    while len(sampled_points) < n_points and i < len(contour) - 1:
-        dist = np.linalg.norm(contour[i + 1] - contour[i])
-        if current_length + dist >= step_size:
-            t = (step_size - current_length) / dist
-            sampled_points.append(contour[i] + t * (contour[i + 1] - contour[i]))
-            current_length = 0  # stay on the same segment
-        else:
-            current_length += dist
-            i += 1
-    return np.array(sampled_points)
+def sample_equidistant_points(contour, n_points=None, point_spacing=None):
+    """n_points along the contour, starting at contour[0] (edge_curvature.sample_edge_points without positions)."""
+    return sample_edge_points(contour, n_points, point_spacing)[0]
 
 
-def measure_curvature(points):
-    """(sign, magnitude, normalized) curvature at each point; see the module docstring for the convention."""
-    n_points = len(points)
-    sign_curvatures = np.zeros(n_points)
-    magnitude_curvatures = np.zeros(n_points)
-    for i in range(n_points):
-        p, p_left, p_right = points[i], points[(i - 1) % n_points], points[(i + 1) % n_points]
-        v = p_right - p_left
-        v_length = np.linalg.norm(v)
-        w = p - p_left
-        cross_product = v[0] * w[1] - v[1] * w[0]
-        magnitude_curvatures[i] = abs(cross_product) / (v_length * v_length) if v_length > 0 else 0
-        sign_curvatures[i] = 1 if cross_product > 0 else -1  # +1 convex (bulges out of the cell)
-    max_magnitude = np.max(magnitude_curvatures) if n_points else 0
-    if max_magnitude > 0:
-        normalized_curvatures = sign_curvatures * (magnitude_curvatures / max_magnitude)
-    else:
-        normalized_curvatures = sign_curvatures * 0
-    return sign_curvatures, magnitude_curvatures, normalized_curvatures
+def measure_curvature(points, closed=True, straight_threshold=0.0):
+    """(sign, magnitude, normalized) by the three-point rule (smoothing 'none'); see edge_curvature."""
+    return three_point_curvature(points, closed, straight_threshold)
 
 
-def calculate_inward_normal(points, mask):
-    """Unit normal at each point, chosen to point into the cell (tested 3 px along each direction)."""
+def calculate_inward_normal(points, mask, closed=True):
+    """Unit normal at each point, chosen to point into the cell (tested 3 px along each direction).
+
+    The tangent is the central difference of the neighbouring points; on an open edge the end points use their
+    one neighbour (no wrap-around across the image).
+    """
     n_points = len(points)
     normals = np.zeros((n_points, 2))
     mask_shape = mask.shape
+
+    def at(j):
+        return points[j % n_points] if closed else points[min(max(j, 0), n_points - 1)]
     for i in range(n_points):
         p = points[i]
-        tangent = points[(i + 1) % n_points] - points[(i - 1) % n_points]
+        tangent = at(i + 1) - at(i - 1)
         tangent_norm = np.linalg.norm(tangent)
         if tangent_norm > 1e-10:
             tangent = tangent / tangent_norm
         else:
-            tangent = points[(i + 2) % n_points] - points[(i - 2) % n_points]
+            tangent = at(i + 2) - at(i - 2)
             tangent_norm = np.linalg.norm(tangent)
             tangent = tangent / tangent_norm if tangent_norm > 1e-10 else np.array([1.0, 0.0])
         normal1 = np.array([-tangent[1], tangent[0]])
@@ -175,25 +142,33 @@ def measure_intensity(image, mask, points, normals, depth=None, width=None, min_
 
 
 def analyze_points(image, mask, contour, points, depth=None, width=None, min_cell_coverage=None,
-                   try_rotation=None, exclude_endpoints=None):
-    """Curvature, inward normals and intensity for already-sampled edge points (one frame)."""
-    curvatures = measure_curvature(points)
-    normals = calculate_inward_normal(points, mask)
+                   try_rotation=None, exclude_endpoints=None, smoothing_px=None, straight_threshold=None, arc=None):
+    """Curvature, inward normals and intensity for already-sampled edge points (one frame).
+
+    arc: arc position of each point along the contour (computed by projection when not given). On an open edge
+    (one that runs off the image) the two end points are always excluded from intensity sampling.
+    """
+    closed = is_closed(contour)
+    if arc is None:
+        arc = arc_positions(contour, points)
+    curvatures = edge_curvature(contour, points, arc, smoothing_px, straight_threshold)
+    normals = calculate_inward_normal(points, mask, closed)
+    exclude_endpoints = DEFAULTS["exclude_endpoints"] if exclude_endpoints is None else exclude_endpoints
     intensities, regions, valid, recovered = measure_intensity(
-        image, mask, points, normals, depth, width, min_cell_coverage, try_rotation, exclude_endpoints)
+        image, mask, points, normals, depth, width, min_cell_coverage, try_rotation, exclude_endpoints or not closed)
     return {"points": points, "curvatures": curvatures, "normals": normals, "intensities": intensities,
             "sampling_regions": regions, "valid_points": valid, "contour_data": contour,
-            "recovered_by_rotation": recovered}
+            "recovered_by_rotation": recovered, "closed": closed}
 
 
-def analyze_frame(image, mask, n_points=None, **params):
+def analyze_frame(image, mask, n_points=None, point_spacing=None, **params):
     """Equidistant-sampling analysis of one frame (the desktop app's "Standard" method)."""
     mask = (np.asarray(mask) > 0).astype(np.uint8)
     contour = detect_cell_edge(mask)
     if len(contour) == 0:
         return {"error": "No contour found"}
-    points = sample_equidistant_points(contour, n_points)
-    return analyze_points(image, mask, contour, points, **params)
+    points, arc = sample_edge_points(contour, n_points, point_spacing)
+    return analyze_points(image, mask, contour, points, arc=arc, **params)
 
 
 def detect_edge_movement(current_mask, previous_mask, threshold=None):

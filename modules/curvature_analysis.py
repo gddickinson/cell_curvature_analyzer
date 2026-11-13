@@ -29,7 +29,7 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
                      min_cell_coverage=DEFAULTS["min_cell_coverage"], try_rotation=DEFAULTS["try_rotation"],
                      exclude_endpoints=DEFAULTS["exclude_endpoints"], angular_distribution=False,
                      axis_based_distribution=False, x_axis_distribution=False,
-                     progress_callback=None):
+                     progress_callback=None, point_spacing=None, smoothing_px=None, straight_threshold=None):
         """
         Process a TIFF stack of microscope images and masks
 
@@ -61,6 +61,8 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
             Whether to distribute points evenly along the x-axis
         progress_callback : function
             Callback function for progress updates (percentage, message)
+        point_spacing, smoothing_px, straight_threshold :
+            Point spacing and curvature options (None = analysis_defaults.DEFAULTS); see edge_curvature.py
 
         Returns:
         --------
@@ -69,6 +71,9 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
         """
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
+        point_spacing = DEFAULTS["point_spacing"] if point_spacing is None else point_spacing
+        smoothing_px = DEFAULTS["smoothing_px"] if smoothing_px is None else smoothing_px
+        straight_threshold = DEFAULTS["straight_threshold"] if straight_threshold is None else straight_threshold
 
         # Store parameters for metadata
         parameters = {
@@ -80,7 +85,10 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
             "exclude_endpoints": exclude_endpoints,
             "angular_distribution": angular_distribution,
             "axis_based_distribution": axis_based_distribution,
-            "x_axis_distribution": x_axis_distribution
+            "x_axis_distribution": x_axis_distribution,
+            "point_spacing": point_spacing,
+            "smoothing_px": smoothing_px,
+            "straight_threshold": straight_threshold,
         }
 
 
@@ -159,7 +167,8 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
             frame_results = self.analyze_frame(
                 image, mask, n_points, depth, width, min_cell_coverage,
                 try_rotation, exclude_endpoints, angular_distribution,
-                axis_based_distribution, x_axis_distribution)
+                axis_based_distribution, x_axis_distribution, point_spacing=point_spacing,
+                smoothing_px=smoothing_px, straight_threshold=straight_threshold)
 
             # Store results
             results[frame_idx] = frame_results
@@ -248,7 +257,8 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
                      width=DEFAULTS["width"], min_cell_coverage=DEFAULTS["min_cell_coverage"],
                      try_rotation=DEFAULTS["try_rotation"], exclude_endpoints=DEFAULTS["exclude_endpoints"],
                      angular_distribution=False,
-                     axis_based_distribution=False, x_axis_distribution=False):
+                     axis_based_distribution=False, x_axis_distribution=False, point_spacing=None,
+                     smoothing_px=None, straight_threshold=None):
         """
         Analyze a single frame
 
@@ -276,6 +286,8 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
             Whether to distribute points evenly along image axes
         x_axis_distribution : bool
             Whether to distribute points evenly along the x-axis
+        point_spacing, smoothing_px, straight_threshold :
+            Point spacing ("Standard" method only) and curvature options; None = DEFAULTS (see edge_curvature.py)
 
         Returns:
         --------
@@ -292,33 +304,32 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
         if x_axis_distribution:
             print(f"DEBUG: Using x-axis distribution of sample points")
             points = self.sample_x_axis_points(contour, n_points)
+            arc = None
             method_name = "X-Axis"
         elif axis_based_distribution:
             print(f"DEBUG: Using axis-based distribution of sample points")
             points = self.sample_axis_based_points(contour, n_points)
+            arc = None
             method_name = "Axis-Based"
         elif angular_distribution:
             print(f"DEBUG: Using angular distribution of sample points")
             points = self.sample_angular_points(contour, n_points)
+            arc = None
             method_name = "Angular"
         else:
             print(f"DEBUG: Using standard equidistant sampling along contour")
-            points = self.sample_equidistant_points(contour, n_points)
+            points, arc = edge_analysis.sample_edge_points(contour, n_points, point_spacing)
             method_name = "Standard"
 
         # Generate debug visualization
         #self.visualize_sampling(image, mask, points, method_name=method_name)
 
-        # Measure curvature
-        curvatures = self.measure_curvature(points)
-
-        # Calculate inward normals
-        normals = self.calculate_inward_normal(points, mask)
-
-        # Measure intensity with cell coverage check
-        intensities, sampling_regions, valid_points, recovered_by_rotation = self.measure_intensity(
-            image, mask, points, normals, depth, width, min_cell_coverage, try_rotation, exclude_endpoints
-        )
+        # Curvature, inward normals and intensity (open edges: no wrap-around, end points not sampled)
+        r = edge_analysis.analyze_points(image, mask, contour, points, depth, width, min_cell_coverage, try_rotation,
+                                         exclude_endpoints, smoothing_px, straight_threshold, arc=arc)
+        curvatures, normals, intensities = r["curvatures"], r["normals"], r["intensities"]
+        sampling_regions, valid_points = r["sampling_regions"], r["valid_points"]
+        recovered_by_rotation = r["recovered_by_rotation"]
 
         # Store results
         results = {
@@ -333,7 +344,8 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
             "exclude_endpoints": exclude_endpoints,
             "angular_distribution": angular_distribution,
             "axis_based_distribution": axis_based_distribution,
-            "x_axis_distribution": x_axis_distribution
+            "x_axis_distribution": x_axis_distribution,
+            "closed": r["closed"]
         }
 
         return results
@@ -415,18 +427,18 @@ class CurvatureAnalyzer(AlternativeSamplingMixin, SamplingDebugMixin):
         """Longest 0.5-level contour of a binary mask (see edge_analysis.detect_cell_edge)."""
         return edge_analysis.detect_cell_edge(mask)
 
-    def sample_equidistant_points(self, contour, n_points=DEFAULTS["n_points"]):
+    def sample_equidistant_points(self, contour, n_points=DEFAULTS["n_points"], point_spacing=None):
         """Equidistant points along a contour (see edge_analysis.sample_equidistant_points)."""
-        return edge_analysis.sample_equidistant_points(contour, n_points)
+        return edge_analysis.sample_equidistant_points(contour, n_points, point_spacing)
 
 
-    def measure_curvature(self, points):
-        """(sign, magnitude, normalized) curvature; sign convention documented in edge_analysis."""
-        return edge_analysis.measure_curvature(points)
+    def measure_curvature(self, points, closed=True, straight_threshold=0.0):
+        """(sign, magnitude, normalized) by the three-point rule; sign convention documented in edge_curvature."""
+        return edge_analysis.measure_curvature(points, closed, straight_threshold)
 
-    def calculate_inward_normal(self, points, mask):
+    def calculate_inward_normal(self, points, mask, closed=True):
         """Unit normals pointing into the cell (see edge_analysis.calculate_inward_normal)."""
-        return edge_analysis.calculate_inward_normal(points, mask)
+        return edge_analysis.calculate_inward_normal(points, mask, closed)
 
     def measure_intensity(self, image, mask, points, normals, depth=DEFAULTS["depth"], width=DEFAULTS["width"],
                           min_cell_coverage=DEFAULTS["min_cell_coverage"], try_rotation=DEFAULTS["try_rotation"],

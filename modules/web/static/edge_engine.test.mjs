@@ -1,12 +1,13 @@
 // node modules/web/static/edge_engine.test.mjs
 // Asserts the JS ports (contour_engine.js, edge_engine.js, stats_engine.js) reproduce the repo's Python analysis
-// (modules/edge_analysis.py via modules/web/analysis.py::analyze_stack, skimage find_contours / draw.polygon,
-// scipy linregress) on tests/fixtures/edge_fixture.json (regenerate: python scripts/make_edge_fixture.py),
+// (modules/edge_analysis.py + edge_curvature.py via modules/web/analysis.py::analyze_stack, skimage find_contours /
+// draw.polygon, scipy linregress, edge_curvature point spacing and smoothed curvature) on tests/fixtures/edge_fixture.json (regenerate: python scripts/make_edge_fixture.py),
 // and pins the curvature sign convention on a circle.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { findContours, detectCellEdge, sampleEquidistant } from './contour_engine.js';
+import { findContours, detectCellEdge } from './contour_engine.js';
 import { analyzeStack, measureCurvature, polygonPixels, roundHalfEven } from './edge_engine.js';
+import { edgeCurvature, isClosed, sampleEdgePoints, smoothedCurvature } from './curvature_engine.js';
 import { linregress } from './stats_engine.js';
 import { readTiff } from './tiff_reader.js';
 
@@ -54,7 +55,7 @@ for (const c of fx.cases) {
   got.frames.forEach((f, i) => {
     const e = exp.frames[i];
     if (e.error) { assert.equal(f.error, e.error, `${c.name} frame ${i}`); return; }
-    for (const k of ['contour', 'points', 'sign', 'magnitude', 'normalized', 'normals', 'intensities', 'regions', 'valid', 'recovered']) {
+    for (const k of ['contour', 'points', 'sign', 'magnitude', 'normalized', 'normals', 'intensities', 'regions', 'valid', 'recovered', 'closed']) {
       close(f[k], e[k], `${c.name} frame ${i} ${k}`);
     }
   });
@@ -80,15 +81,30 @@ for (const t of fx.tiffs) {
 }
 console.log(`tiff_reader: ${fx.tiffs.length} files ok`);
 
-// 6. Sign convention on a circle: +1 everywhere (convex), and a reversed walk flips it.
+// 6. edge_curvature on random contours: point spacing (equal / legacy), arc positions, smoothed curvature.
+for (const c of fx.curvature) {
+  assert.equal(isClosed(c.contour), c.closed, 'closed');
+  const got = sampleEdgePoints(c.contour, c.n, c.spacing);
+  close(got.points, c.points, `${c.spacing} points`); close(got.s, c.s, `${c.spacing} arc`);
+  for (const [sigma, k] of Object.entries(c.kappa)) close(smoothedCurvature(c.contour, c.s, +sigma), k, `kappa sigma ${sigma}`);
+}
+console.log(`curvature_engine: ${fx.curvature.length} contour cases ok`);
+
+// 7. Sign convention on a circle: +1 everywhere (convex), and a reversed walk flips it.
 const H = 120, W = 120, disc = new Uint8Array(H * W);
 for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) disc[r * W + c] = (r - 60) ** 2 + (c - 60) ** 2 < 40 ** 2 ? 1 : 0;
-const pts = sampleEquidistant(detectCellEdge(disc, H, W), 24);
+const edge = detectCellEdge(disc, H, W);
+const { points: pts } = sampleEdgePoints(edge, 24, 'legacy');
 const cv = measureCurvature(pts);
 assert.ok(cv.sign.every(s => s === 1), 'circle: every point convex (+1)');
 const expected = Math.tan(Math.PI / 24) / 2, med = [...cv.magnitude].sort((a, b) => a - b)[12];
 assert.ok(Math.abs(med - expected) / expected < 0.1, 'circle magnitude ~ tan(pi/n)/2');
 assert.ok(measureCurvature([...pts].reverse()).sign.every(s => s === -1), 'reversed traversal flips the sign');
+// default options (100 points, smoothing): every point convex, curvature ~ 1/40 px
+const eq = sampleEdgePoints(edge, 100, 'equal'), sm = edgeCurvature(edge, eq.points, eq.s, 5, 0.005);
+assert.ok(sm.sign.every(s => s === 1), 'smoothed: circle convex everywhere');
+const medK = [...sm.magnitude].sort((a, b) => a - b)[50];
+assert.ok(Math.abs(medK * 40 - 1) < 0.1, `smoothed curvature ~ 1/R (${medK})`);
 assert.deepEqual([0.5, 1.5, 2.5, -0.5, 2.4, 2.6].map(roundHalfEven), [0, 2, 2, 0, 2, 3]);
 
 console.log(`edge_engine: ${fx.cases.length} stack cases, ${fx.contours.length} contour, ${fx.polygons.length} polygon, ` +

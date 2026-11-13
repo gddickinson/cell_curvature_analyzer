@@ -17,7 +17,7 @@ export async function staticApi(path, body) {
     const im = fromB64(body.image_f32, Float32Array), mk = fromB64(body.mask_u8, Uint8Array);
     const images = [], masks = [];
     for (let t = 0; t < T; t++) { images.push(Float64Array.from(im.subarray(t * n, (t + 1) * n))); masks.push(mk.subarray(t * n, (t + 1) * n)); }
-    return analyzeStack(images, masks, h, w, body.params);
+    return analyzeStack(images, masks, h, w, { ...(await file('info')).defaults, ...(body.params || {}) });
   }
   return file(clean);
 }

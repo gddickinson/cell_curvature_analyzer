@@ -93,27 +93,3 @@ export function detectCellEdge(mask, h, w) {
   for (const c of findContours(mask, h, w, 0.5)) if (c.length > best.length) best = c;
   return best;
 }
-
-// sqrt(dx*dx + dy*dy) as numpy.linalg.norm computes it (Math.hypot can differ in the last bit)
-const dist = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1]; return Math.sqrt(dx * dx + dy * dy); };
-
-// Points every (contour length / n) along the contour, starting at contour[0] (edge_analysis.sample_equidistant_points).
-export function sampleEquidistant(contour, n) {
-  let length = 0;
-  for (let i = 0; i < contour.length - 1; i++) length += dist(contour[i], contour[i + 1]);
-  const step = length / n;
-  const out = [contour[0]];
-  let cur = 0, i = 0;
-  while (out.length < n && i < contour.length - 1) {
-    const d = dist(contour[i], contour[i + 1]);
-    if (cur + d >= step) {
-      const t = (step - cur) / d, a = contour[i], b = contour[i + 1];
-      out.push([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
-      cur = 0;
-    } else {
-      cur += d;
-      i++;
-    }
-  }
-  return out;
-}

@@ -1,44 +1,28 @@
 // Browser port of modules/edge_analysis.py (curvature, inward normals, intensity sampling, edge movement, pooled
 // regression) and of modules/web/analysis.py::analyze_stack. Tested against Python in edge_engine.test.mjs.
-// Points are [row, col]. Curvature sign: +1 where the edge bulges out of the cell (convex), -1 where it bends
-// into the cell or is straight (see the Convention page and edge_analysis.py).
-import { detectCellEdge, sampleEquidistant } from './contour_engine.js';
+// Points are [row, col]. Curvature (curvature_engine.js): +1 where the edge bulges out of the cell (convex), -1
+// where it bends into the cell, 0 straight (see the Convention page and edge_curvature.py).
+import { detectCellEdge } from './contour_engine.js';
+import { edgeCurvature, isClosed, roundHalfEven, sampleEdgePoints, threePointCurvature } from './curvature_engine.js';
 import { linregress } from './stats_engine.js';
+
+export { roundHalfEven };
 
 const norm2 = (x, y) => Math.sqrt(x * x + y * y);
 
-// Python's round(): halves go to the even integer.
-export function roundHalfEven(x) {
-  const f = Math.floor(x), d = x - f;
-  if (d > 0.5) return f + 1;
-  if (d < 0.5) return f;
-  return f % 2 === 0 ? f : f + 1;
-}
+// Legacy three-point curvature (smoothing "none"); edge_curvature.measure_curvature
+export const measureCurvature = (points, closed = true, thr = 0) => threePointCurvature(points, closed, thr);
 
-export function measureCurvature(points) {
-  const n = points.length, sign = new Array(n), mag = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const p = points[i], pl = points[(i - 1 + n) % n], pr = points[(i + 1) % n];
-    const v0 = pr[0] - pl[0], v1 = pr[1] - pl[1], vl = norm2(v0, v1);
-    const w0 = p[0] - pl[0], w1 = p[1] - pl[1];
-    const cross = v0 * w1 - v1 * w0;
-    mag[i] = vl > 0 ? Math.abs(cross) / (vl * vl) : 0;
-    sign[i] = cross > 0 ? 1 : -1;
-  }
-  const mx = n ? Math.max(...mag) : 0;
-  const normalized = mag.map((m, i) => (mx > 0 ? sign[i] * (m / mx) : sign[i] * 0));
-  return { sign, magnitude: mag, normalized };
-}
-
-export function inwardNormals(points, mask, h, w) {
+export function inwardNormals(points, mask, h, w, closed = true) {
   const n = points.length, out = new Array(n);
   const clip = (v, hi) => Math.min(Math.max(v, 0), hi);
+  const at = j => (closed ? points[((j % n) + n) % n] : points[Math.min(Math.max(j, 0), n - 1)]);
   for (let i = 0; i < n; i++) {
     const p = points[i];
-    let t0 = points[(i + 1) % n][0] - points[(i - 1 + n) % n][0], t1 = points[(i + 1) % n][1] - points[(i - 1 + n) % n][1];
+    let t0 = at(i + 1)[0] - at(i - 1)[0], t1 = at(i + 1)[1] - at(i - 1)[1];
     let tn = norm2(t0, t1);
     if (tn > 1e-10) { t0 /= tn; t1 /= tn; } else {
-      t0 = points[(i + 2) % n][0] - points[(i - 2 + 2 * n) % n][0]; t1 = points[(i + 2) % n][1] - points[(i - 2 + 2 * n) % n][1];
+      t0 = at(i + 2)[0] - at(i - 2)[0]; t1 = at(i + 2)[1] - at(i - 2)[1];
       tn = norm2(t0, t1);
       if (tn > 1e-10) { t0 /= tn; t1 /= tn; } else { t0 = 1; t1 = 0; }
     }
@@ -93,11 +77,11 @@ function coverage(verts, mask, h, w) {
 
 const meanAt = (image, w, { rr, cc }) => { let s = 0; for (let k = 0; k < rr.length; k++) s += image[rr[k] * w + cc[k]]; return s / rr.length; };
 
-export function measureIntensity(image, mask, h, w, points, normals, p) {
+export function measureIntensity(image, mask, h, w, points, normals, p, excludeEnds = p.exclude_endpoints) {
   const n = points.length, intensities = new Array(n).fill(null), valid = new Array(n).fill(false);
   const recovered = new Array(n).fill(false), regions = [];
   for (let i = 0; i < n; i++) {
-    if (p.exclude_endpoints && (i === 0 || i === n - 1)) { regions.push([[0, 0], [0, 0], [0, 0], [0, 0]]); continue; }
+    if (excludeEnds && (i === 0 || i === n - 1)) { regions.push([[0, 0], [0, 0], [0, 0], [0, 0]]); continue; }
     const pt = points[i], nrm = normals[i], perp = [-nrm[1], nrm[0]];
     let verts = rectangle(pt, nrm, perp, p.depth, p.width);
     const c = coverage(verts, mask, h, w);
@@ -139,11 +123,12 @@ export function summaryStats(frames, which) {
 export function analyzeFrame(image, mask, h, w, p) {
   const contour = detectCellEdge(mask, h, w);
   if (!contour.length) return { error: 'No contour found' };
-  const points = sampleEquidistant(contour, p.n_points);
-  const curv = measureCurvature(points);
-  const normals = inwardNormals(points, mask, h, w);
-  const s = measureIntensity(image, mask, h, w, points, normals, p);
-  return { contour, points, ...curv, normals, ...s };
+  const closed = isClosed(contour);
+  const { points, s: arc } = sampleEdgePoints(contour, p.n_points, p.point_spacing);
+  const curv = edgeCurvature(contour, points, arc, p.smoothing_px, p.straight_threshold);
+  const normals = inwardNormals(points, mask, h, w, closed);
+  const s = measureIntensity(image, mask, h, w, points, normals, p, p.exclude_endpoints || !closed);
+  return { contour, points, ...curv, normals, ...s, closed };
 }
 
 // Stack: images/masks are arrays of per-frame typed arrays. Mirrors modules/web/analysis.py::analyze_stack.

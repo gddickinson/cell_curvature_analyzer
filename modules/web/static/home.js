@@ -19,8 +19,8 @@ route('home', async () => {
     <div class="grid">
       <a class="card" href="#/analyze"><b>Analyze</b><span>Image + mask (TIFF stacks or PNG) or the synthetic demo: edge overlay coloured by
         curvature, sampling rectangles, profiles along the edge, intensity vs curvature regression, edge movement, CSV export.</span></a>
-      <a class="card" href="#/convention"><b>Curvature sign</b><span>The convention, why it is consistent, what magnitude means, and live
-        test shapes: a circle, a notch and a wound edge.</span></a>
+      <a class="card" href="#/convention"><b>Curvature sign</b><span>The convention, smoothing and the straight dead-band, why the sign is
+        consistent, what magnitude means, and live test shapes (defaults vs legacy): a circle, a notch and a wound edge.</span></a>
       <a class="card" href="#/about"><b>About</b><span>The desktop app (${info.desktop_tabs.length} tabs), how to run it and this web app, and how
         the browser port is checked against Python.</span></a>
     </div>`;

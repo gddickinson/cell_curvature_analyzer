@@ -87,11 +87,30 @@ python main.py
 
 ### Curvature Measurement
 
-The application calculates three types of curvature at equidistant points along the cell edge:
+The application calculates three types of curvature at points spaced equally along the cell edge:
 
-1. **Sign Curvature (-1 or 1)**: Indicates whether the curvature is inward (negative) or outward (positive)
-2. **Magnitude Curvature (≥0)**: The absolute strength of the curvature
-3. **Normalized Curvature (-1 to 1)**: Combines direction and magnitude
+1. **Sign Curvature (-1, 0 or 1)**: +1 where the edge bulges out of the cell (convex), -1 where it bends into the
+   cell (concave), 0 where it is straight (|curvature| below the straight threshold)
+2. **Magnitude Curvature (≥0)**: |curvature| in 1/px (1/radius) with smoothing; dimensionless with the legacy rule
+3. **Normalized Curvature (-1 to 1)**: sign × magnitude / the frame's largest magnitude
+
+Curvature options (parameter panel, web Analyze page; defaults in `modules/analysis_defaults.py`, code and full
+description in `modules/edge_curvature.py`):
+
+- **Curvature smoothing** (σ in px, default 6): the edge is smoothed with a Gaussian along its length and the curvature
+  of the smoothed edge is used. **0 = none (legacy)**: the three-point rule used before 2026-11. Without smoothing the
+  pixel staircase of the mask dominates single-point signs (on a 40 px circle at the default 100 points, only ~45 % of
+  points come out convex). The default was chosen with `python scripts/curvature_benchmark.py` (seeded masks of known
+  curvature, with segmentation noise).
+- **Straight below** (1/px): points with |curvature| below this are straight (sign 0). With smoothing 0 and threshold 0
+  straight runs count as -1, as before.
+- **Point spacing**: equal arc-length steps (default) or **legacy**, the old sampler, whose steps were up to one
+  contour segment short and left one large gap at the end of the edge.
+- **Open edges** (a cell running off the image) are treated as open: the first and last points are not neighbours,
+  and they are not sampled for intensity.
+
+To reproduce results from before 2026-11: point spacing *legacy*, smoothing *none*, straight threshold 0 (identical for
+cells inside the image; for border-touching edges the two end points now have no curvature and no intensity).
 
 ### Intensity Sampling
 
@@ -117,9 +136,9 @@ from ImageJ TIFFs or entered by hand; without it lengths stay in pixels and the 
 
 ![Analyze page on the synthetic demo](docs/img/analyze_demo.png)
 
-**Curvature sign convention** (documented in `modules/edge_analysis.py`, shown on the *Curvature sign* page and pinned by
+**Curvature sign convention** (documented in `modules/edge_curvature.py`, shown on the *Curvature sign* page and pinned by
 tests on a circular mask): **+1 where the edge bulges out of the cell (convex)**, **-1 where it bends into the cell
-(concave) or is straight**. It holds because `find_contours` always walks the edge with the cell on its right.
+(concave)**, **0 where it is straight**. It holds because `find_contours` always walks the edge with the cell on its right.
 
 ![Curvature sign page](docs/img/convention.png)
 
@@ -129,7 +148,9 @@ pip install -r requirements-web.txt
 python run_web.py            # http://127.0.0.1:8208 (local only)
 ```
 The local app runs the Python core: `POST /api/analyze` passes the stack to `modules/web/analysis.py::analyze_stack`,
-which uses `modules/edge_analysis.py` (the same functions `CurvatureAnalyzer` delegates to).
+which uses `modules/edge_analysis.py` and `modules/edge_curvature.py` (the same functions `CurvatureAnalyzer` delegates
+to). On the static site the JS port (`edge_engine.js`, `curvature_engine.js`) runs in the browser; a node test checks it
+against Python.
 
 ### Static site (GitHub Pages)
 `python scripts/build_static.py` writes `site/`; `.github/workflows/pages.yml` publishes it on every push to `main`.

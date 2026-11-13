@@ -8,8 +8,11 @@ route('about', async () => {
       protein locations from fluorescence microscope recordings, with a web interface for the core analysis.</p>
     <h2>Method</h2>
     <ol><li><b>Edge.</b> The cell edge is the longest 0.5-level contour of the binary mask (<code>skimage.measure.find_contours</code>).</li>
-      <li><b>Points.</b> ${info.defaults.n_points} points (default) are placed at equal distances along the edge.</li>
-      <li><b>Curvature.</b> At each point, from its two neighbours: sign, magnitude and normalized curvature (<a href="#/convention">convention</a>).</li>
+      <li><b>Points.</b> ${info.defaults.n_points} points (default) are placed at equal arc-length steps along the edge (both ends
+        of an open, border-touching edge included).</li>
+      <li><b>Curvature.</b> The edge is smoothed (Gaussian, σ = ${info.defaults.smoothing_px} px along the edge) and its curvature
+        read at each point: sign (+1 convex, −1 concave, 0 straight below ${info.defaults.straight_threshold}/px), magnitude |κ| (1/px)
+        and normalized curvature. Smoothing "none" gives the legacy three-point rule (<a href="#/convention">convention and options</a>).</li>
       <li><b>Intensity.</b> An inward normal is chosen by testing which side is inside the mask; a rectangle ${info.defaults.depth} px deep and
         ${info.defaults.width} px wide reaches into the cell and its mean fluorescence is recorded if at least
         ${Math.round(info.defaults.min_cell_coverage * 100)}% of it lies inside the mask (optionally retrying the opposite direction).</li>

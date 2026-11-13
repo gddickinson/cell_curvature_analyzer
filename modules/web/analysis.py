@@ -13,7 +13,7 @@ from .. import edge_analysis as E
 from ..analysis_defaults import DEFAULTS
 
 PARAM_KEYS = ("n_points", "depth", "width", "min_cell_coverage", "try_rotation", "exclude_endpoints",
-              "movement_threshold")
+              "movement_threshold", "point_spacing", "smoothing_px", "straight_threshold")
 
 
 def clean_params(params=None):
@@ -28,6 +28,12 @@ def clean_params(params=None):
         raise ValueError("depth and width must be positive")
     if not (0 <= p["min_cell_coverage"] <= 1):
         raise ValueError("min_cell_coverage must be between 0 and 1")
+    if p["point_spacing"] not in ("equal", "legacy"):
+        raise ValueError("point_spacing must be 'equal' or 'legacy'")
+    if not (0 <= p["smoothing_px"] <= 50):
+        raise ValueError("smoothing_px must be between 0 (none, legacy) and 50")
+    if not (0 <= p["straight_threshold"] <= 1):
+        raise ValueError("straight_threshold must be between 0 and 1 (1/px)")
     return p
 
 
@@ -43,7 +49,7 @@ def _frame_json(t, r):
             "sign": _list(sign), "magnitude": _list(mag), "normalized": _list(norm), "normals": _list(r["normals"]),
             "intensities": [None if np.isnan(v) else float(v) for v in r["intensities"]],
             "regions": [_list(v) for v in r["sampling_regions"]], "valid": [bool(v) for v in r["valid_points"]],
-            "recovered": [bool(v) for v in r["recovered_by_rotation"]]}
+            "recovered": [bool(v) for v in r["recovered_by_rotation"]], "closed": bool(r["closed"])}
 
 
 def analyze_stack(images, masks, params=None):
@@ -55,10 +61,11 @@ def analyze_stack(images, masks, params=None):
         images, masks = images[None], masks[None] if masks.ndim == 2 else masks
     if images.shape != masks.shape:
         raise ValueError(f"image stack {images.shape} and mask stack {masks.shape} differ in shape")
-    kw = {k: p[k] for k in ("depth", "width", "min_cell_coverage", "try_rotation", "exclude_endpoints")}
+    kw = {k: p[k] for k in ("depth", "width", "min_cell_coverage", "try_rotation", "exclude_endpoints",
+                            "smoothing_px", "straight_threshold")}
     frames, movement, curv_s, curv_n, ints, valid = [], [], [], [], [], []
     for t in range(images.shape[0]):
-        r = E.analyze_frame(images[t], masks[t], p["n_points"], **kw)
+        r = E.analyze_frame(images[t], masks[t], p["n_points"], p["point_spacing"], **kw)
         frames.append(_frame_json(t, r))
         if "error" in r:
             continue

@@ -2,7 +2,7 @@
 
 Run with `python run_web.py` (http://127.0.0.1:8208, local only). `scripts/build_static.py` exports every path in
 STATIC_ENDPOINTS to JSON for the GitHub Pages site, so keep that list in step with the GET routes below.
-POST /api/analyze runs the repo's Python analysis (modules/edge_analysis.py via web/analysis.py); on the static
+POST /api/analyze runs the repo's Python analysis (modules/edge_analysis.py + edge_curvature.py via web/analysis.py); on the static
 site static_api.js answers it with the JS port (edge_engine.js), which edge_engine.test.mjs checks against Python.
 """
 from pathlib import Path
@@ -36,7 +36,8 @@ def info():
                        "relate, from a fluorescence image and a binary cell mask.",
         "repo": "cell_curvature_analyzer",
         "defaults": dict(DEFAULTS),
-        "curvature_measures": ["sign (+1 convex, -1 concave or straight)", "magnitude (|cross| / chord^2, >= 0)",
+        "curvature_measures": ["sign (+1 convex, -1 concave, 0 straight)",
+                               "magnitude (|curvature| in 1/px; legacy: |cross| / chord^2)",
                                "normalized (sign x magnitude / frame max, -1..1)"],
         "desktop_tabs": ["Visualization", "Analysis Results", "Correlation Analysis", "Temporal Analysis",
                          "Edge Movement", "Export Results", "Settings", "Log"],

@@ -14,11 +14,16 @@ const PARAMS = [
   ['width', 'Sampling width (px)', 'number', 1, 200, 1, 'Rectangle width along the edge'],
   ['min_cell_coverage', 'Min. cell coverage', 'number', 0, 1, 0.05, 'Fraction of the rectangle that must be inside the mask'],
   ['movement_threshold', 'Movement threshold', 'number', 0, 1, 0.01, '|score| above this = extending / retracting'],
+  ['smoothing_px', 'Curvature smoothing (px, 0 = none, legacy)', 'number', 0, 50, 0.5, 'Gaussian sigma along the edge before curvature; 0 = legacy three-point curvature'],
+  ['straight_threshold', 'Straight below |κ| (1/px)', 'number', 0, 1, 0.001, 'Points with |curvature| below this are straight (sign 0); 0 with smoothing 0 = legacy (straight = −1)'],
 ];
+const SPACINGS = [['equal', 'Equal arc length'], ['legacy', 'Legacy (pre-2026-11 sampler)']];
 
 function paramForm(d) {
   return `<div class="params">${PARAMS.map(([k, label, , min, max, step, help]) => `<div><label for="p-${k}">${label}</label>
-    <input id="p-${k}" type="number" min="${min}" max="${max}" step="${step}" value="${d[k]}" title="${esc(help)}"></div>`).join('')}</div>
+    <input id="p-${k}" type="number" min="${min}" max="${max}" step="${step}" value="${d[k]}" title="${esc(help)}"></div>`).join('')}
+    <div><label for="p-point_spacing">Point spacing</label><select id="p-point_spacing" title="Equal arc-length steps, or the old sampler (reproduces results from before 2026-11)">
+      ${SPACINGS.map(([v, l]) => `<option value="${v}" ${d.point_spacing === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
     <label class="check"><input type="checkbox" id="p-try_rotation" ${d.try_rotation ? 'checked' : ''}>Try rotation (retry rejected rectangles pointing outwards)</label>
     <label class="check"><input type="checkbox" id="p-exclude_endpoints" ${d.exclude_endpoints ? 'checked' : ''}>Exclude end points (open, border-touching edges)</label>`;
 }
@@ -28,7 +33,14 @@ function readParams() {
   for (const [k] of PARAMS) p[k] = +$('#p-' + k).value;
   p.n_points = Math.round(p.n_points); p.depth = Math.round(p.depth); p.width = Math.round(p.width);
   p.try_rotation = $('#p-try_rotation').checked; p.exclude_endpoints = $('#p-exclude_endpoints').checked;
+  p.point_spacing = $('#p-point_spacing').value;
   return p;
+}
+
+function setParams(d) {
+  for (const [k] of PARAMS) $('#p-' + k).value = d[k];
+  $('#p-try_rotation').checked = d.try_rotation; $('#p-exclude_endpoints').checked = d.exclude_endpoints;
+  $('#p-point_spacing').value = d.point_spacing;
 }
 
 function setStatus(msg, err = false) { const el = $('#status'); if (el) { el.textContent = msg; el.className = err ? 'progress err' : 'progress'; } }
@@ -86,11 +98,20 @@ function lengthNote(f) {
   if (!f || f.error) return '';
   let L = 0;
   for (let i = 0; i < f.contour.length - 1; i++) L += Math.hypot(f.contour[i + 1][0] - f.contour[i][0], f.contour[i + 1][1] - f.contour[i][1]);
-  const step = L / S.result.params.n_points, um = S.umPerPx;
+  const n = S.result.params.n_points, step = L / (f.closed === false ? n - 1 : n), um = S.umPerPx;
   const u = v => (um ? ` = ${fmt(v * um)} µm` : '');
   return `Edge length ${fmt(L)} px${u(L)}; point spacing ${fmt(step)} px${u(step)}; rectangles ${S.result.params.depth} × ${S.result.params.width} px${um ? ` = ${fmt(S.result.params.depth * um)} × ${fmt(S.result.params.width * um)} µm` : ''}.
-    ${step < 6 ? '<span class="err">Spacing under ~6 px: the pixel staircase of the mask makes single-point signs noisy (see Curvature sign).</span>' : ''}
-    ${um ? '' : 'No pixel size given: lengths in pixels; curvature is dimensionless.'}`;
+    ${curvNote(S.result.params, um)} ${um ? '' : 'No pixel size given: lengths in pixels.'}`;
+}
+
+function curvNote(p, um) {
+  if (p.smoothing_px > 0) {
+    const thr = p.straight_threshold;
+    return `Curvature: edge smoothed with σ = ${fmt(p.smoothing_px)} px${um ? ` (${fmt(p.smoothing_px * um)} µm)` : ''}; magnitude = |κ| in 1/px${um ? ` (÷ ${um} for 1/µm)` : ''};
+      straight (sign 0) below ${fmt(thr)}/px${thr > 0 ? `, i.e. radius above ${fmt(1 / thr)} px${um ? ` = ${fmt(um / thr)} µm` : ''}` : ''}.`;
+  }
+  return `Curvature: none (legacy three-point rule; magnitude dimensionless, depends on point spacing).
+    <span class="err">Without smoothing the pixel staircase of the mask makes single-point signs noisy (see Curvature sign).</span>`;
 }
 
 function drawCurrent() {
@@ -165,10 +186,10 @@ route('analyze', async (args) => {
     </div><div><p class="small" id="source">${S.source || 'No data loaded yet.'}</p><div id="results"></div></div></div>`;
   $('#demo').onclick = loadDemo;
   $('#run').onclick = run;
-  $('#reset').onclick = () => { for (const [k] of PARAMS) $('#p-' + k).value = info.defaults[k]; $('#p-try_rotation').checked = info.defaults.try_rotation; $('#p-exclude_endpoints').checked = info.defaults.exclude_endpoints; };
+  $('#reset').onclick = () => setParams(info.defaults);
   $('#f-img').onchange = e => { S.imgFile = e.target.files[0]; loadFiles(); };
   $('#f-mask').onchange = e => { S.maskFile = e.target.files[0]; loadFiles(); };
   $('#um').oninput = e => { S.umPerPx = +e.target.value > 0 ? +e.target.value : null; if (S.result) drawCurrent(); };
   if (S.umPerPx) $('#um').value = S.umPerPx;
-  if (S.result) { if (S.result.params) for (const [k] of PARAMS) $('#p-' + k).value = S.result.params[k]; renderResults(); } else if (args[0] === 'demo') await loadDemo();
+  if (S.result) { if (S.result.params) setParams(S.result.params); renderResults(); } else if (args[0] === 'demo') await loadDemo();
 });

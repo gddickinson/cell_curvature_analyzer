@@ -43,7 +43,8 @@ def test_circle_is_convex_everywhere(radius, n_points):
 
 
 def test_close_points_on_a_pixel_circle_are_noisy():
-    """Documented limitation: no smoothing, so at ~4 px spacing some points on a pixel circle get sign -1."""
+    """Why smoothing is the default: with the legacy three-point rule (no smoothing), at ~4 px spacing some points on
+    a pixel circle get sign -1 (tests/test_edge_curvature.py covers the smoothed default)."""
     pts = E.sample_equidistant_points(E.detect_cell_edge(disc(radius=40)), 60)
     sign = E.measure_curvature(pts)[0]
     assert 0.5 < np.mean(sign == 1) < 1
@@ -82,7 +83,8 @@ def test_wound_edge_bump_is_positive():
 
 
 def test_straight_run_counts_as_minus_one():
-    """Documented edge case: a collinear point (cross product 0) gets sign -1 and magnitude 0."""
+    """Legacy rule (threshold 0): a collinear point (cross product 0) gets sign -1 and magnitude 0; the dead-band
+    (straight_threshold > 0, the default) makes it 0 (tests/test_edge_curvature.py)."""
     pts = np.column_stack([np.zeros(5), np.arange(5.0)])
     sign, mag, _ = E.measure_curvature(pts)
     assert sign[2] == -1 and mag[2] == 0
