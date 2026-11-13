@@ -27,3 +27,8 @@ py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 include = ["modules*"]
+
+[tool.pytest.ini_options]
+# pytest-qt (if installed) must use the same binding as the app; PySide6 next to PyQt5 crashes the GUI tests
+qt_api = "pyqt5"
+filterwarnings = ["ignore:Unknown config option. qt_api:pytest.PytestConfigWarning"]

@@ -11,8 +11,9 @@
 - **`curvature_analysis.py`** - `CurvatureAnalyzer`: stack/frame driver used by the GUI. `process_stack()`, `analyze_frame()`; edge detection, equidistant sampling, curvature, normals, intensity, movement and regression delegate to `edge_analysis`.
 - **`sampling_methods.py`** - `AlternativeSamplingMixin` (of `CurvatureAnalyzer`): angular, axis-based and x-axis point sampling.
 - **`sampling_debug.py`** - `SamplingDebugMixin`: matplotlib debug plots of the sampling methods (not used by the GUI).
-- **`edge_analysis.py`** - Qt-free analysis core (also used by the web app): `detect_cell_edge`, `sample_equidistant_points`, `measure_curvature` (sign convention in the module docstring: +1 convex / bulging out of the cell, -1 concave or straight), `calculate_inward_normal`, `measure_intensity`, `analyze_points`, `analyze_frame`, `detect_edge_movement`, `summary_correlation_stats`.
-- **`analysis_defaults.py`** - `DEFAULTS`: the single source of analysis defaults (n_points, depth, width, min_cell_coverage, try_rotation, exclude_endpoints, movement_threshold); read by the widgets, settings, analyzer and web app.
+- **`edge_analysis.py`** - Qt-free analysis core (also used by the web app): `detect_cell_edge`, `sample_equidistant_points`, `measure_curvature` (legacy three-point rule), `calculate_inward_normal` (open edges: no wrap-around), `measure_intensity`, `analyze_points`, `analyze_frame`, `detect_edge_movement`, `summary_correlation_stats`.
+- **`edge_curvature.py`** - edge geometry and the curvature options (docstring = the sign convention: +1 convex, -1 concave, 0 straight): `is_closed`, `arc_length`, `sample_edge_points` (point_spacing 'equal' / 'legacy'), `sample_legacy`, `arc_positions`, `gaussian_smooth`, `smoothed_curvature` (smoothing_px), `three_point_curvature` (legacy rule, straight_threshold dead-band), `edge_curvature` (dispatch).
+- **`analysis_defaults.py`** - `DEFAULTS`: the single source of analysis defaults (n_points, depth, width, min_cell_coverage, try_rotation, exclude_endpoints, movement_threshold, point_spacing, smoothing_px, straight_threshold); read by the widgets, settings, analyzer and web app.
 - **`synthetic_cell.py`** - `make_demo_stack()`: seeded synthetic image + mask stack (wound-edge layout, enrichment at concave edge by construction) for the web demo and tests. Not measured data.
 - **`visualization.py`** (774 lines) - `Visualizer`: matplotlib-based plotting for curvature maps, intensity overlays, correlation plots.
 - **`widgets/`** - Custom PyQt5 widgets used by `MainWindow` (re-exported by `widgets/__init__.py`): `image_viewer.py` (`ImageViewer`), `overlay_canvas.py` (`OverlayCanvas`), `tables_log.py` (`ResultsTable`, `LogConsole`), `parameter_panel.py` (`ParameterPanel`).
@@ -27,8 +28,9 @@
 ### Web interface (`modules/web/`)
 - **`app.py`** - FastAPI app: `GET /api/info`, `GET /api/demo`, `POST /api/analyze`; `STATIC_ENDPOINTS` exported by `scripts/build_static.py`.
 - **`analysis.py`** - `analyze_stack()` (stack-level analysis on `edge_analysis`, same statistics as `process_stack`), `clean_params`, base64 `encode`/`decode`.
-- **`static/`** - ES-module front end (no build step): `main.js` (router), `home.js`, `analyze.js` + `analyze_view.js` + `plots.js` (Analyze page), `convention.js` (curvature sign page), `about.js`; `stack_io.js` + `tiff_reader.js` (loading TIFF/PNG stacks); JS ports `contour_engine.js` (find_contours, equidistant points), `edge_engine.js` (curvature, normals, draw.polygon, intensity, movement, stack), `stats_engine.js` (linregress); `edge_engine.test.mjs` (node test vs Python fixture); `static_api.js` (static-site data layer); `core.js`/`style.css` shared web kit.
+- **`static/`** - ES-module front end (no build step): `main.js` (router), `home.js`, `analyze.js` + `analyze_view.js` + `plots.js` (Analyze page), `convention.js` (curvature sign page), `about.js`; `stack_io.js` + `tiff_reader.js` (loading TIFF/PNG stacks); JS ports `contour_engine.js` (find_contours), `curvature_engine.js` (edge_curvature: spacing, smoothing, curvature), `edge_engine.js` (normals, draw.polygon, intensity, movement, stack), `stats_engine.js` (linregress); `edge_engine.test.mjs` (node test vs Python fixture); `static_api.js` (static-site data layer); `core.js`/`style.css` shared web kit.
 - **`run_web.py`** (repo root) - starts the app on 127.0.0.1:8208.
+- **`scripts/curvature_benchmark.py`** - seeded benchmark of the curvature options on masks of known curvature (chose the smoothing / straight-threshold defaults; also run in reduced form by `tests/test_edge_curvature.py`).
 - **`scripts/desktop_demo_digest.py`** - offscreen digest of everything the desktop app computes and draws on the synthetic demo (pipeline, every GUI view, export); `--compare A B` to check that a refactor changes nothing.
 - **`scripts/build_static.py`**, **`scripts/screenshots.py`**, **`scripts/make_edge_fixture.py`** - static export, Playwright smoke test, Python-vs-JS fixture (`tests/fixtures/`).
 
@@ -43,6 +45,8 @@
 ### Tests (`tests/`)
 - **`test_curvature_analysis.py`** - Tests for `CurvatureAnalyzer`: edge detection, point sampling, curvature measurement, frame analysis, TIFF I/O.
 - **`test_edge_analysis.py`** - The Qt-free core and the curvature sign convention (circle, notch, wound edge, straight run, spacing noise).
+- **`test_edge_curvature.py`** - curvature options: legacy options reproduce the old code, equal spacing, open edges (no wrap-around), smoothed curvature, dead-band, defaults vs the benchmark.
+- **`test_gui_offscreen.py`** - MainWindow offscreen: starts, parameter panel defaults, current-frame and stack analysis run in worker threads.
 - **`test_process_stack.py`** - `process_stack` with frames that have no cell.
 - **`test_packaging.py`** - pyproject build backend and console-script target exist.
 - **`test_web.py`** - web API, static build, fixture currency, web vs desktop statistics, node test of the JS port.

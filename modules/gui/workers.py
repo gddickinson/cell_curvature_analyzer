@@ -40,3 +40,21 @@ class AnalysisWorker(QThread):
     def progress_callback(self, percentage, message):
         self.progress_signal.emit(percentage, message)
 
+
+class FunctionWorker(QThread):
+    """Runs fn(*args, **kwargs) off the main thread; emits finished_signal(result) or error_signal(message).
+
+    The function must not touch Qt widgets; the slots connected to the signals run on the main thread.
+    """
+    finished_signal = pyqtSignal(object)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__()
+        self.fn, self.args, self.kwargs = fn, args, kwargs
+
+    def run(self):
+        try:
+            self.finished_signal.emit(self.fn(*self.args, **self.kwargs))
+        except Exception as e:  # reported to the user by the error slot
+            self.error_signal.emit(str(e))

@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
 from PyQt5.QtCore import QThread, pyqtSignal
 from modules.widgets import LogConsole
 from modules.analysis_defaults import DEFAULTS
-from modules.gui.workers import AnalysisWorker
+from modules.gui.workers import AnalysisWorker, FunctionWorker
 
 
 class DataActionsMixin:
@@ -31,11 +31,14 @@ class DataActionsMixin:
         }
 
     def analyze_current_frame(self):
-        """Analyze only the current frame"""
+        """Analyze only the current frame (in a worker thread; the result is shown by current_frame_analyzed)."""
         # Check if data is loaded
         if (self.loaded_data.get('images') is None or
             self.loaded_data.get('masks') is None):
             QMessageBox.warning(self, "Warning", "Please load image and mask stacks first.")
+            return
+        if getattr(self, 'frame_worker', None) is not None and self.frame_worker.isRunning():
+            self.statusBar().showMessage("A frame analysis is already running")
             return
 
         params = self.analysis_parameters()
@@ -48,30 +51,31 @@ class DataActionsMixin:
 
         # Log
         self.log_console.log(f"Analyzing frame {frame+1} with parameters: {params}")
+        self.statusBar().showMessage(f"Analyzing frame {frame+1}...")
 
-        # Run analysis
-        try:
-            frame_results = self.curvature_analyzer.analyze_frame(
-                image, mask, **params)
+        self.frame_worker = FunctionWorker(self.curvature_analyzer.analyze_frame, image, mask, **params)
+        self.frame_worker.frame = frame
+        # bound methods of the window (a QObject on the main thread): the slots run on the main thread
+        self.frame_worker.finished_signal.connect(self.current_frame_analyzed)
+        self.frame_worker.error_signal.connect(self.current_frame_failed)
+        self.frame_worker.start()
 
-            # Update results
-            if self.loaded_data.get('results') is None:
-                self.loaded_data['results'] = {}
+    def current_frame_analyzed(self, frame_results):
+        """Store a single-frame result (main thread) and refresh the displays."""
+        frame = self.frame_worker.frame
+        if self.loaded_data.get('results') is None:
+            self.loaded_data['results'] = {}
+        self.loaded_data['results'][frame] = frame_results
+        self.update_overlay_display()
+        self.update_results_display()
+        self.log_console.log(f"Frame {frame+1} analysis completed successfully")
+        self.statusBar().showMessage(f"Frame {frame+1} analysis completed")
 
-            self.loaded_data['results'][frame] = frame_results
-
-            # Update displays
-            self.update_overlay_display()
-            self.update_results_display()
-
-            # Log
-            self.log_console.log(f"Frame {frame+1} analysis completed successfully")
-            self.statusBar().showMessage(f"Frame {frame+1} analysis completed")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to analyze frame: {str(e)}")
-            self.log_console.log(f"Error analyzing frame {frame+1}: {str(e)}", LogConsole.ERROR)
-            self.statusBar().showMessage("Error analyzing frame")
+    def current_frame_failed(self, message):
+        frame = self.frame_worker.frame
+        QMessageBox.critical(self, "Error", f"Failed to analyze frame: {message}")
+        self.log_console.log(f"Error analyzing frame {frame+1}: {message}", LogConsole.ERROR)
+        self.statusBar().showMessage("Error analyzing frame")
 
     def open_image_stack(self):
         """Open a microscope image stack"""
