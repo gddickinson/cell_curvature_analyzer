@@ -5,11 +5,30 @@ import tifffile
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
 from PyQt5.QtCore import QThread, pyqtSignal
 from modules.widgets import LogConsole
+from modules.analysis_defaults import DEFAULTS
 from modules.gui.workers import AnalysisWorker
 
 
 class DataActionsMixin:
     """MainWindow mixin: loading image / mask stacks and running the analysis (whole stack and current frame)."""
+
+    def analysis_parameters(self):
+        """Analysis parameters from the settings spin boxes and the parameter panel (fallbacks: DEFAULTS)."""
+        pp, d = self.parameter_panel.parameters, DEFAULTS
+        return {
+            'n_points': self.n_points_spin.value(),
+            'depth': self.depth_spin.value(),
+            'width': self.width_spin.value(),
+            'min_cell_coverage': self.min_coverage_spin.value(),
+            'try_rotation': pp.get('try_rotation', d['try_rotation']),
+            'exclude_endpoints': pp.get('exclude_endpoints', d['exclude_endpoints']),
+            'angular_distribution': pp.get('angular_distribution', False),
+            'axis_based_distribution': pp.get('axis_based_distribution', False),
+            'x_axis_distribution': pp.get('x_axis_distribution', False),
+            'point_spacing': pp.get('point_spacing', d['point_spacing']),
+            'smoothing_px': pp.get('smoothing_px', d['smoothing_px']),
+            'straight_threshold': pp.get('straight_threshold', d['straight_threshold']),
+        }
 
     def analyze_current_frame(self):
         """Analyze only the current frame"""
@@ -19,30 +38,8 @@ class DataActionsMixin:
             QMessageBox.warning(self, "Warning", "Please load image and mask stacks first.")
             return
 
-        # Get parameters from UI
-        try_rotation = self.parameter_panel.parameters.get('try_rotation', False)
-        exclude_endpoints = self.parameter_panel.parameters.get('exclude_endpoints', False)
-        angular_distribution = self.parameter_panel.parameters.get('angular_distribution', False)
-        axis_based_distribution = self.parameter_panel.parameters.get('axis_based_distribution', False)
-        x_axis_distribution = self.parameter_panel.parameters.get('x_axis_distribution', False)
-
-        print(f"DEBUG: Analyzing current frame with try_rotation={try_rotation}, "
-              f"exclude_endpoints={exclude_endpoints}, angular_distribution={angular_distribution}, "
-              f"axis_based_distribution={axis_based_distribution}, "
-              f"x_axis_distribution={x_axis_distribution}")
-
-        params = {
-            'n_points': self.n_points_spin.value(),
-            'depth': self.depth_spin.value(),
-            'width': self.width_spin.value(),
-            'min_cell_coverage': self.min_coverage_spin.value(),
-            'try_rotation': try_rotation,
-            'exclude_endpoints': exclude_endpoints,
-            'angular_distribution': angular_distribution,
-            'axis_based_distribution': axis_based_distribution,
-            'x_axis_distribution': x_axis_distribution
-        }
-
+        params = self.analysis_parameters()
+        print(f"DEBUG: Analyzing current frame with {params}")
 
         # Get current frame data
         frame = self.current_frame
@@ -261,31 +258,11 @@ class DataActionsMixin:
             QMessageBox.warning(self, "Warning", "Please load image and mask stacks first.")
             return
 
-        # Get parameters
-        try_rotation = self.parameter_panel.parameters.get('try_rotation', False)
-        exclude_endpoints = self.parameter_panel.parameters.get('exclude_endpoints', False)
-        angular_distribution = self.parameter_panel.parameters.get('angular_distribution', False)
-        axis_based_distribution = self.parameter_panel.parameters.get('axis_based_distribution', False)
-        x_axis_distribution = self.parameter_panel.parameters.get('x_axis_distribution', False)
-
-        print(f"DEBUG: Starting analysis with try_rotation={try_rotation}, "
-              f"exclude_endpoints={exclude_endpoints}, angular_distribution={angular_distribution}, "
-              f"axis_based_distribution={axis_based_distribution}, "
-              f"x_axis_distribution={x_axis_distribution}")
-
         params = {
             'image_path': self.loaded_data.get('image_path', ''),
             'mask_path': self.loaded_data.get('mask_path', ''),
             'output_dir': os.path.join(os.getcwd(), "results"),
-            'n_points': self.n_points_spin.value(),
-            'depth': self.depth_spin.value(),
-            'width': self.width_spin.value(),
-            'min_cell_coverage': self.min_coverage_spin.value(),
-            'try_rotation': try_rotation,
-            'exclude_endpoints': exclude_endpoints,
-            'angular_distribution': angular_distribution,
-            'axis_based_distribution': axis_based_distribution,
-            'x_axis_distribution': x_axis_distribution
+            **self.analysis_parameters(),
         }
 
         # Log all parameters

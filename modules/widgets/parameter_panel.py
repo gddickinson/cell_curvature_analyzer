@@ -13,6 +13,8 @@ class ParameterPanel(QWidget):
     # Signal emitted when parameters are changed
     parameters_changed = pyqtSignal(dict)
 
+    SPACING_LABELS = {"equal": "Equal arc length", "legacy": "Legacy (pre-2026-11)"}
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -99,6 +101,39 @@ class ParameterPanel(QWidget):
         self.x_axis_distribution_cb.setToolTip("Distribute points evenly along x-axis to reduce bunching")
         form_layout.addRow("", self.x_axis_distribution_cb)
 
+        # Point spacing along the edge
+        self.point_spacing_combo = QComboBox()
+        self.point_spacing_combo.addItems(list(self.SPACING_LABELS.values()))
+        self.point_spacing_combo.setCurrentText(self.SPACING_LABELS[DEFAULTS["point_spacing"]])
+        self.point_spacing_combo.setToolTip("Equal arc-length steps, or the pre-2026-11 sampler (reproduces old results)")
+        self.point_spacing_combo.currentIndexChanged.connect(self.on_parameter_changed)
+        form_layout.addRow("Point Spacing:", self.point_spacing_combo)
+
+        # Curvature smoothing (Gaussian sigma along the edge, px); 0 = none (legacy three-point curvature)
+        self.smoothing_spin = QDoubleSpinBox()
+        self.smoothing_spin.setRange(0.0, 50.0)
+        self.smoothing_spin.setDecimals(1)
+        self.smoothing_spin.setSingleStep(0.5)
+        self.smoothing_spin.setSpecialValueText("none (legacy)")
+        self.smoothing_spin.setSuffix(" px")
+        self.smoothing_spin.setValue(DEFAULTS["smoothing_px"])
+        self.smoothing_spin.setToolTip("Gaussian smoothing of the edge before curvature (sigma along the edge). "
+                                       "0 = none: legacy three-point curvature")
+        self.smoothing_spin.valueChanged.connect(self.on_parameter_changed)
+        form_layout.addRow("Curvature Smoothing:", self.smoothing_spin)
+
+        # Dead-band: |curvature| below this is straight (sign 0)
+        self.straight_threshold_spin = QDoubleSpinBox()
+        self.straight_threshold_spin.setRange(0.0, 1.0)
+        self.straight_threshold_spin.setDecimals(4)
+        self.straight_threshold_spin.setSingleStep(0.001)
+        self.straight_threshold_spin.setSuffix(" 1/px")
+        self.straight_threshold_spin.setValue(DEFAULTS["straight_threshold"])
+        self.straight_threshold_spin.setToolTip("Points with |curvature| below this are straight (sign 0). "
+                                                "0 with smoothing 'none' = legacy (straight counted as -1)")
+        self.straight_threshold_spin.valueChanged.connect(self.on_parameter_changed)
+        form_layout.addRow("Straight Below:", self.straight_threshold_spin)
+
         # Add temporal analysis mode selector
         self.temporal_mode_combo = QComboBox()
         self.temporal_mode_combo.addItems(["Current Frame", "Current-Previous Frames", "Current-Random Frames"])
@@ -141,7 +176,10 @@ class ParameterPanel(QWidget):
             'random_mode': self.random_mode_combo.currentText(),
             'angular_distribution': self.angular_distribution_cb.isChecked(),
             'axis_based_distribution': self.axis_based_distribution_cb.isChecked(),
-            'x_axis_distribution': self.x_axis_distribution_cb.isChecked()
+            'x_axis_distribution': self.x_axis_distribution_cb.isChecked(),
+            'point_spacing': self.point_spacing(),
+            'smoothing_px': self.smoothing_spin.value(),
+            'straight_threshold': self.straight_threshold_spin.value(),
         }
 
 
@@ -181,6 +219,9 @@ class ParameterPanel(QWidget):
         self.parameters['reference_frame'] = self.reference_frame_spin.value()
         self.parameters['exclude_endpoints'] = self.exclude_endpoints_cb.isChecked()
         self.parameters['x_axis_distribution'] = self.x_axis_distribution_cb.isChecked()
+        self.parameters['point_spacing'] = self.point_spacing()
+        self.parameters['smoothing_px'] = self.smoothing_spin.value()
+        self.parameters['straight_threshold'] = self.straight_threshold_spin.value()
 
         # Make distribution options mutually exclusive
         if self.sender() == self.x_axis_distribution_cb and self.x_axis_distribution_cb.isChecked():
@@ -249,6 +290,9 @@ class ParameterPanel(QWidget):
         self.angular_distribution_cb.setChecked(False)  # Reset to default (off)
         self.axis_based_distribution_cb.setChecked(False)  # Reset to default (off)
         self.x_axis_distribution_cb.setChecked(False)  # Reset to default (off)
+        self.point_spacing_combo.setCurrentText(self.SPACING_LABELS[DEFAULTS["point_spacing"]])
+        self.smoothing_spin.setValue(DEFAULTS["smoothing_px"])
+        self.straight_threshold_spin.setValue(DEFAULTS["straight_threshold"])
         # Don't reset reference frame as it depends on data
 
     def update_parameters(self, parameters):
@@ -293,6 +337,12 @@ class ParameterPanel(QWidget):
             self.axis_based_distribution_cb.setChecked(parameters['axis_based_distribution'])
         if 'x_axis_distribution' in parameters:
             self.x_axis_distribution_cb.setChecked(parameters['x_axis_distribution'])
+        if 'point_spacing' in parameters:
+            self.point_spacing_combo.setCurrentText(self.SPACING_LABELS[parameters['point_spacing']])
+        if 'smoothing_px' in parameters:
+            self.smoothing_spin.setValue(parameters['smoothing_px'])
+        if 'straight_threshold' in parameters:
+            self.straight_threshold_spin.setValue(parameters['straight_threshold'])
 
 
         # Re-enable signals
@@ -308,6 +358,11 @@ class ParameterPanel(QWidget):
 
         # Update reference frame visibility
         self.update_reference_frame_visibility()
+
+    def point_spacing(self):
+        """'equal' or 'legacy' from the point-spacing combo box."""
+        labels = {v: k for k, v in self.SPACING_LABELS.items()}
+        return labels[self.point_spacing_combo.currentText()]
 
     def update_frame_range(self, max_frame):
         """
